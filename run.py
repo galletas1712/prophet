@@ -19,6 +19,9 @@ def run_model(config):
         "test prompt 3",
     ]
 
+    for request in requests:
+        scheduler.schedule()
+
 
 if __name__ == "__main__":
     run_model()

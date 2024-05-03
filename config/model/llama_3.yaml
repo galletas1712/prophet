@@ -1,0 +1,9 @@
+name: llama_3
+
+ckpt_dir: model_weights/Meta-Llama-3-8B
+tokenizer_path: model_weights/Meta-Llama-3-8B/tokenizer.model
+
+max_seq_len: 512
+max_batch_size: 4
+model_parallel_size: 1
+seed: 0

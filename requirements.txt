@@ -1,2 +1,5 @@
 torch
 hydra-core
+fairscale
+tiktoken==0.4.0
+blobfile
