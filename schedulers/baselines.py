@@ -1,6 +1,8 @@
+from typing import List
 from collections import OrderedDict
 
-from utils import SCHEDULERS, register_scheduler, Request, RequestStage
+from entrypoints.api import Request, RequestStage
+from schedulers.utils import register_scheduler
 
 
 @register_scheduler("fcfs")
@@ -12,15 +14,15 @@ class FCFS_Scheduler:
 
         self.requests = OrderedDict()
         self.next_id = 0
-    
-    def add_request(self, prompt):
+
+    def create_request(self, prompt: str) -> Request:
         request_id = self.next_id
         self.next_id += 1
 
-        request = Request(request_id, prompt)
+        request = Request(request_id)
         self.request_dict[request_id] = request
 
-    def schedule(self):
+    def schedule(self) -> List[Request]:
         # Iterate over the requests dict, popping items that have finished.
         batch = []
         to_pop = []
@@ -32,7 +34,7 @@ class FCFS_Scheduler:
                     break
             else:
                 to_pop.append(request_id)
-        
+
         for finished_request in to_pop:
             self.requests.pop(finished_request)
 

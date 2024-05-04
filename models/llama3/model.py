@@ -3,7 +3,7 @@
 
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 import fairscale.nn.model_parallel.initialize as fs_init
 import torch
@@ -23,7 +23,9 @@ class ModelArgs:
     n_heads: int = 32
     n_kv_heads: Optional[int] = None
     vocab_size: int = -1
-    multiple_of: int = 256  # make SwiGLU hidden layer size multiple of large power of 2
+    multiple_of: int = (
+        256  # make SwiGLU hidden layer size multiple of large power of 2
+    )
     ffn_dim_multiplier: Optional[float] = None
     norm_eps: float = 1e-5
     rope_theta: float = 500000
@@ -47,7 +49,9 @@ class RMSNorm(torch.nn.Module):
 
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    freqs = 1.0 / (
+        theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)
+    )
     t = torch.arange(end, device=freqs.device, dtype=torch.float32)
     freqs = torch.outer(t, freqs)
     freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
@@ -90,7 +94,9 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 class Attention(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
-        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
+        self.n_kv_heads = (
+            args.n_heads if args.n_kv_heads is None else args.n_kv_heads
+        )
         model_parallel_size = fs_init.get_model_parallel_world_size()
         self.n_local_heads = args.n_heads // model_parallel_size
         self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
@@ -177,17 +183,35 @@ class Attention(nn.Module):
         )  # (bs, cache_len + seqlen, n_local_heads, head_dim)
 
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
-        keys = keys.transpose(1, 2)  # (bs, n_local_heads, cache_len + seqlen, head_dim)
+        keys = keys.transpose(
+            1, 2
+        )  # (bs, n_local_heads, cache_len + seqlen, head_dim)
         values = values.transpose(
             1, 2
         )  # (bs, n_local_heads, cache_len + seqlen, head_dim)
-        scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
+        scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(
+            self.head_dim
+        )
         if mask is not None:
-            scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
+            scores = (
+                scores + mask
+            )  # (bs, n_local_heads, seqlen, cache_len + seqlen)
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-        output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
+        output = torch.matmul(
+            scores, values
+        )  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
+
+    def forward_with_kv_cache(
+        self,
+        x: torch.Tensor,
+        start_pos: int,
+        freqs_cis: torch.Tensor,
+        batched_kv_cache: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ):
+        pass
 
 
 class FeedForward(nn.Module):
@@ -203,16 +227,30 @@ class FeedForward(nn.Module):
         # custom dim factor multiplier
         if ffn_dim_multiplier is not None:
             hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+        hidden_dim = multiple_of * (
+            (hidden_dim + multiple_of - 1) // multiple_of
+        )
 
         self.w1 = ColumnParallelLinear(
-            dim, hidden_dim, bias=False, gather_output=False, init_method=lambda x: x
+            dim,
+            hidden_dim,
+            bias=False,
+            gather_output=False,
+            init_method=lambda x: x,
         )
         self.w2 = RowParallelLinear(
-            hidden_dim, dim, bias=False, input_is_parallel=True, init_method=lambda x: x
+            hidden_dim,
+            dim,
+            bias=False,
+            input_is_parallel=True,
+            init_method=lambda x: x,
         )
         self.w3 = ColumnParallelLinear(
-            dim, hidden_dim, bias=False, gather_output=False, init_method=lambda x: x
+            dim,
+            hidden_dim,
+            bias=False,
+            gather_output=False,
+            init_method=lambda x: x,
         )
 
     def forward(self, x):
@@ -243,7 +281,23 @@ class TransformerBlock(nn.Module):
         freqs_cis: torch.Tensor,
         mask: Optional[torch.Tensor],
     ):
-        h = x + self.attention(self.attention_norm(x), start_pos, freqs_cis, mask)
+        h = x + self.attention(
+            self.attention_norm(x), start_pos, freqs_cis, mask
+        )
+        out = h + self.feed_forward(self.ffn_norm(h))
+        return out
+
+    def forward_with_kv_cache(
+        self,
+        x: torch.Tensor,
+        start_pos: List[int],
+        freqs_cis: torch.Tensor,
+        batched_kv_cache: torch.Tensor,
+        mask: Optional[torch.Tensor],
+    ):
+        h = x + self.attention.forward_with_kv_cache(
+            self.attention_norm(x), start_pos, freqs_cis, batched_kv_cache, mask
+        )
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
 
@@ -275,6 +329,63 @@ class Transformer(nn.Module):
         )
 
     @torch.inference_mode()
+    def forward_with_kv_cache(
+        self,
+        tokens: torch.Tensor,
+        padding_start: List[int],
+        start_pos: List[int],
+        batched_kv_cache: torch.Tensor,
+    ):
+        """Runs inference using a user-provided KV cache.
+
+        Args
+            tokens: Shape (batch_size, seq_len) of token ids padded to have
+                equal seq_len.
+            padding_start: Shape (batch_size,) giving the first index of each
+                item in the batch that is padding.
+            start_pos: Shape (batch_size,) giving where in its sequence each
+                item of the batch is starting at.
+            batched_kv_cache: Shape (batch_size, seq_len, model_dim) padded to
+                have equal seq_len.
+        """
+
+        _bsz, seqlen = tokens.shape
+        h = self.tok_embeddings(tokens)
+
+        self.freqs_cis = self.freqs_cis.to(h.device)
+
+        freq_idxs = [
+            list(range(start_pos[i], start_pos[i] + seqlen))
+            for i in range(len(start_pos))
+        ]
+
+        freqs_cis = torch.gather(
+            self.freqs_cis, torch.tensor(freq_idxs, dtype=torch.long)
+        )
+
+        mask = None
+        if seqlen > 1:
+            mask = torch.full(
+                (seqlen, seqlen), float("-inf"), device=tokens.device
+            )
+
+            mask = torch.triu(mask, diagonal=1)
+
+            # When performing key-value caching, we compute the attention scores
+            # only for the new sequence. Thus, the matrix of scores is of size
+            # (seqlen, cache_len + seqlen), and the only masked entries are (i, j) for
+            # j > cache_len + i, since row i corresponds to token cache_len + i.
+            mask = torch.hstack(
+                [torch.zeros((seqlen, start_pos), device=tokens.device), mask]
+            ).type_as(h)
+
+        for layer in self.layers:
+            h = layer.forward_with_kv_cache(h, start_pos, freqs_cis, mask)
+        h = self.norm(h)
+        output = self.output(h).float()
+        return output
+
+    @torch.inference_mode()
     def forward(self, tokens: torch.Tensor, start_pos: int):
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
@@ -283,7 +394,9 @@ class Transformer(nn.Module):
 
         mask = None
         if seqlen > 1:
-            mask = torch.full((seqlen, seqlen), float("-inf"), device=tokens.device)
+            mask = torch.full(
+                (seqlen, seqlen), float("-inf"), device=tokens.device
+            )
 
             mask = torch.triu(mask, diagonal=1)
 

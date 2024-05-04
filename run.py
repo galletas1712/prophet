@@ -2,7 +2,7 @@ import hydra
 
 from models import get_model_constructor
 from schedulers import create_scheduler
-from entrypoints import create_llm
+from entrypoints import LLM
 
 
 @hydra.main(
@@ -11,16 +11,29 @@ from entrypoints import create_llm
 def run_model(config):
     model_constructor = get_model_constructor(config.model)
     scheduler = create_scheduler(config.scheduler)
-    llm = create_llm(scheduler, model_constructor)
+    llm = LLM(scheduler, model_constructor)
 
-    requests = [
+    prompts = [
         "test prompt 1",
         "test prompt 2",
         "test prompt 3",
     ]
 
-    for request in requests:
-        scheduler.schedule()
+    requests = {}
+
+    for prompt in prompts:
+        request = llm.create_request(prompt)
+        requests[request.request_id] = request
+
+    outputs = []
+    while len(outputs) < len(prompts):
+        llm.step()
+        if llm.request_completed():
+            completed_request_id = llm.pop_completed_request_id()
+            outputs.append(requests[completed_request_id].output)
+
+    print(f"Received outputs:")
+    print(outputs)
 
 
 if __name__ == "__main__":
