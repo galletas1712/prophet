@@ -10,6 +10,8 @@ def register_scheduler(name):
         SCHEDULERS[name] = scheduler_class
         return scheduler_class
 
+    return register_curr_scheduler
 
-def create_scheduler(scheduler_config):
+
+def build_scheduler(scheduler_config):
     return SCHEDULERS[scheduler_config.name](**scheduler_config)

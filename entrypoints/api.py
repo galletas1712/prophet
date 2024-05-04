@@ -24,8 +24,11 @@ class Request:
         self.prompt = prompt
         self.prompt_tokens = prompt_tokens
 
-        self.output = None
+        self.output = ""
         self.output_tokens = []
+
+        self.full_text = prompt
+        self.all_tokens = prompt_tokens
         
         self.stage = stage
         self.kv_cache = kv_cache

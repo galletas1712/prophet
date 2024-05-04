@@ -1,7 +1,4 @@
 import hydra
-
-from models import get_model_constructor
-from schedulers import create_scheduler
 from entrypoints import LLM
 
 
@@ -9,9 +6,7 @@ from entrypoints import LLM
     config_path="config/", config_name="llama_3_test", version_base=None
 )
 def run_model(config):
-    model_constructor = get_model_constructor(config.model)
-    scheduler = create_scheduler(config.scheduler)
-    llm = LLM(scheduler, model_constructor)
+    llm = LLM(config.scheduler, config.model)
 
     prompts = [
         "test prompt 1",
