@@ -1,6 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed in accordance with the terms of the Llama 3 Community License Agreement.
 
+from dataclasses import dataclass
 import json
 import os
 import sys
@@ -31,6 +32,25 @@ class ChatPrediction(TypedDict, total=False):
     tokens: List[str]  # not required
     logprobs: List[float]  # not required
 
+@dataclass
+class LlamaBatchParams:
+    prompt_tokens: List[List[int]]
+    max_gen_len: int
+    temperature: float = 0.6,
+    top_p: float = 0.9,
+    logprobs: bool = False,
+    echo: bool = False,
+
+@dataclass
+class LlamaBatch:
+    min_prompt_len: int
+    max_prompt_len: int
+    total_len: int
+    tokens: torch.Tensor
+    token_logprobs: Optional[torch.Tensor]
+    prev_pos: int
+    eos_reached: torch.Tensor
+    input_text_mask: torch.Tensor
 
 class Llama:
     @staticmethod
@@ -111,7 +131,100 @@ class Llama:
     def __init__(self, model: Transformer, tokenizer: Tokenizer):
         self.model = model
         self.tokenizer = tokenizer
+        self.stop_tokens = torch.tensor(list(tokenizer.stop_tokens))
         self.formatter = ChatFormat(tokenizer)
+    
+    @torch.inference_mode()
+    def prepare_batch(
+        self,
+        batch_params: LlamaBatchParams,
+    ):
+        params = self.model.params
+        bsz = len(batch_params.prompt_tokens)
+        assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
+
+        min_prompt_len = min(len(t) for t in batch_params.prompt_tokens)
+        max_prompt_len = max(len(t) for t in batch_params.prompt_tokens)
+        assert max_prompt_len <= params.max_seq_len
+        total_len = min(params.max_seq_len, batch_params.max_gen_len + max_prompt_len)
+
+        pad_id = self.tokenizer.pad_id
+        tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cuda")
+        token_logprobs = None
+        for k, t in enumerate(batch_params.prompt_tokens):
+            tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
+        if batch_params.logprobs:
+            token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
+
+        prev_pos = 0
+        eos_reached = torch.tensor([False] * bsz, device="cuda")
+        input_text_mask = tokens != pad_id
+
+        batch = LlamaBatch(
+            min_prompt_len=min_prompt_len,
+            max_prompt_len=max_prompt_len,
+            total_len=total_len,
+            tokens=tokens,
+            token_logprobs=token_logprobs,
+            prev_pos=prev_pos,
+            eos_reached=eos_reached,
+            input_text_mask=input_text_mask,
+        )
+        return batch
+    
+    @torch.inference_mode()
+    def step(
+        self,
+        batch: LlamaBatch,
+        batch_params: LlamaBatchParams,
+        right_edge: int,
+    ):
+        logits = self.model.forward(batch.tokens[:, batch.prev_pos:right_edge], batch.prev_pos)
+        if batch_params.temperature > 0:
+            probs = torch.softmax(logits[:, -1] / batch_params.temperature, dim=-1)
+            next_token = sample_top_p(probs, batch_params.top_p)
+        else:
+            next_token = torch.argmax(logits[:, -1], dim=-1)
+
+        next_token = next_token.reshape(-1)
+        # only replace token if prompt has already been generated
+        next_token = torch.where(
+            batch.input_text_mask[:, right_edge], batch.tokens[:, right_edge], next_token
+        )
+        batch.tokens[:, right_edge] = next_token
+        if batch_params.logprobs:
+            batch.token_logprobs[:, batch.prev_pos + 1 : right_edge + 1] = -F.cross_entropy(
+                input=logits.transpose(1, 2),
+                target=batch.tokens[:, batch.prev_pos + 1 : right_edge + 1],
+                reduction="none",
+                ignore_index=self.tokenizer.pad_id,
+            )
+        batch.eos_reached |= (~batch.input_text_mask[:, right_edge]) & (
+            torch.isin(next_token, self.stop_tokens)
+        )
+        batch.prev_pos = right_edge
+
+    @torch.inference_mode()
+    def prefill(self, batch: LlamaBatch, batch_params: LlamaBatchParams):
+        if batch.min_prompt_len == batch.total_len: # No need to generate
+            # NOTE: this is a bit intricate. Don't produce next token because we didn't allocate space for it!
+            logits = self.model.forward(batch.tokens, batch.prev_pos)
+            batch.token_logprobs = -F.cross_entropy(
+                input=logits.transpose(1, 2),
+                target=batch.tokens,
+                reduction="none",
+                ignore_index=batch.pad_id,
+            )
+        else:
+            # NOTE: no chunked prefilled here.
+            self.step(batch, batch_params, batch.min_prompt_len)
+
+    @torch.inference_mode()
+    def decode(self, batch: LlamaBatch, batch_params: LlamaBatchParams):
+        if all(batch.eos_reached) or batch.prev_pos == batch.total_len - 1:
+            return False
+        self.step(batch, batch_params, batch.prev_pos + 1)
+        return True
 
     @torch.inference_mode()
     def generate(
@@ -142,76 +255,27 @@ class Llama:
             If logprobs is True, token log probabilities are computed for each generated token.
 
         """
-        params = self.model.params
-        bsz = len(prompt_tokens)
-        assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
 
-        min_prompt_len = min(len(t) for t in prompt_tokens)
-        max_prompt_len = max(len(t) for t in prompt_tokens)
-        assert max_prompt_len <= params.max_seq_len
-        total_len = min(params.max_seq_len, max_gen_len + max_prompt_len)
-
-        pad_id = self.tokenizer.pad_id
-        tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cuda")
-        for k, t in enumerate(prompt_tokens):
-            tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
-        if logprobs:
-            token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
-
-        prev_pos = 0
-        eos_reached = torch.tensor([False] * bsz, device="cuda")
-        input_text_mask = tokens != pad_id
-        if min_prompt_len == total_len:
-            logits = self.model.forward(tokens, prev_pos)
-            token_logprobs = -F.cross_entropy(
-                input=logits.transpose(1, 2),
-                target=tokens,
-                reduction="none",
-                ignore_index=pad_id,
-            )
-
-        stop_tokens = torch.tensor(list(self.tokenizer.stop_tokens))
-
-        for cur_pos in range(min_prompt_len, total_len):
-            logits = self.model.forward(tokens[:, prev_pos:cur_pos], prev_pos)
-            if temperature > 0:
-                probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-                next_token = sample_top_p(probs, top_p)
-            else:
-                next_token = torch.argmax(logits[:, -1], dim=-1)
-
-            next_token = next_token.reshape(-1)
-            # only replace token if prompt has already been generated
-            next_token = torch.where(
-                input_text_mask[:, cur_pos], tokens[:, cur_pos], next_token
-            )
-            tokens[:, cur_pos] = next_token
-            if logprobs:
-                token_logprobs[:, prev_pos + 1 : cur_pos + 1] = -F.cross_entropy(
-                    input=logits.transpose(1, 2),
-                    target=tokens[:, prev_pos + 1 : cur_pos + 1],
-                    reduction="none",
-                    ignore_index=pad_id,
-                )
-            eos_reached |= (~input_text_mask[:, cur_pos]) & (
-                torch.isin(next_token, stop_tokens)
-            )
-            prev_pos = cur_pos
-            if all(eos_reached):
+        batch_params = LlamaBatchParams(prompt_tokens, max_gen_len, temperature, top_p, logprobs, echo)
+        batch = self.prepare_batch(batch_params) 
+        self.prefill(batch, batch_params)
+        while True:
+            should_continue = self.decode(batch, batch_params)
+            if not should_continue:
                 break
 
         if logprobs:
-            token_logprobs = token_logprobs.tolist()
+            batch.token_logprobs = batch.token_logprobs.tolist()
         out_tokens, out_logprobs = [], []
-        for i, toks in enumerate(tokens.tolist()):
+        for i, toks in enumerate(batch.tokens.tolist()):
             # cut to max gen len
             start = 0 if echo else len(prompt_tokens[i])
             toks = toks[start : len(prompt_tokens[i]) + max_gen_len]
             probs = None
             if logprobs:
-                probs = token_logprobs[i][start : len(prompt_tokens[i]) + max_gen_len]
+                probs = batch.token_logprobs[i][start : len(prompt_tokens[i]) + max_gen_len]
             # cut to after eos tok if any
-            for stop_token in self.tokenizer.stop_tokens:
+            for stop_token in self.stop_tokens:
                 try:
                     eos_idx = toks.index(stop_token)
                     toks = toks[:eos_idx]
