@@ -3,7 +3,7 @@ from entrypoints import LLM
 
 
 @hydra.main(
-    config_path="config/", config_name="llama_3_test", version_base=None
+    config_path="config/", config_name="dummy_test", version_base=None
 )
 def run_model(config):
     llm = LLM(config.scheduler, config.model)
@@ -23,9 +23,8 @@ def run_model(config):
     outputs = []
     while len(outputs) < len(prompts):
         llm.step()
-        if llm.request_completed():
-            completed_request_id = llm.pop_completed_request_id()
-            outputs.append(requests[completed_request_id].output)
+        for completed_request_ids in llm.curr_step_completed_request_ids:
+            outputs.append(requests[completed_request_ids].output)
 
     print(f"Received outputs:")
     print(outputs)
