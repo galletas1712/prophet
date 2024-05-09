@@ -110,8 +110,7 @@ class Llama:
         checkpoint = torch.load(ckpt_path, map_location="cpu")
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
-
-        model_args: ModelArgs = ModelArgs(
+            model_args: ModelArgs = ModelArgs(
             max_seq_len=max_seq_len,
             max_batch_size=max_batch_size,
             **params,
@@ -133,7 +132,7 @@ class Llama:
         self.tokenizer = tokenizer
         self.stop_tokens = torch.tensor(list(tokenizer.stop_tokens))
         self.formatter = ChatFormat(tokenizer)
-    
+
     @torch.inference_mode()
     def prepare_batch(
         self,
@@ -171,7 +170,59 @@ class Llama:
             input_text_mask=input_text_mask,
         )
         return batch
-    
+
+    # def batch_tensors(seq_len, aux_dim, tensors: List[torch.Tensor]):
+    #     bsz = len(tensors)
+
+    #     batched_tensor = torch.zeros(
+    #         (bsz, seq_len, aux_dim),
+    #         dtype=tensors[0].dtype,
+    #         device=tensors[0].device    # TODO: Disaggregate.
+    #     )
+
+    #     for idx in range(bsz):
+    #         batched_tensor[idx, :tensors[idx].size[0], :] =  tensors[idx]
+    #     return batched_tensor
+
+    # @torch.inference_mode()
+    # def step(
+    #     self,
+    #     tokens: List[List[int]],
+    #     k_caches: List[torch.tensor],
+    #     v_caches: List[torch.tensor],
+    #     batch_params: LlamaBatchParams,
+    # ):
+    #     """
+    #     tokens:
+    #     - The ith element is the new tokens for the ith request in the batch. If
+    #       we are doing a decode step, it is just one token (the last one that 
+    #       was sampled).
+    #     """
+    #     # Pack the kv caches into a batch.
+    #     params = self.model.params
+    #     bsz = len(batch_params.prompt_tokens)
+    #     assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
+
+    #     max_prompt_len = max(len(t) for t in batch_params.prompt_tokens)
+    #     assert max_prompt_len <= params.max_seq_len
+    #     total_max_len = params.max_seq_len + batch_params.max_gen_len
+
+    #     batched_k_caches = torch.stack(k_caches)
+    #     batched_v_caches = torch.stack(v_caches)
+    #             # Pack the input tokens into a batch.
+    #     max_prompt_len = max([len(seq_tokens) for seq_tokens in tokens])
+
+    #     pad_id = self.tokenizer.pad_id
+    #     padded_tokens = torch.full((bsz, max_prompt_len), pad_id, dtype=torch.long, device="cuda")
+    #     for k, t in enumerate(tokens):
+    #         padded_tokens[k, : len(t)] = \
+    #         torch.tensor(t, dtype=torch.long, device="cuda")
+    #         # Keep track of the indices of the first padding tokens in the kv cache.
+    #     padding_start = []
+    #     for t in prompt_tokens:
+    #         padding_start.append(len(t))
+    #             # Keep track of the start positions.
+    #     # start_pos = 
     @torch.inference_mode()
     def step(
         self,
@@ -227,6 +278,30 @@ class Llama:
         return True
 
     @torch.inference_mode()
+    def postprocess(self, batch: LlamaBatch, batch_params: LlamaBatchParams):
+        if batch_params.logprobs:
+            batch.token_logprobs = batch.token_logprobs.tolist()
+        out_tokens, out_logprobs = [], []
+        for i, toks in enumerate(batch.tokens.tolist()):
+            # Truncate to max gen len
+            start = 0 if batch_params.echo else len(batch_params.prompt_tokens[i])
+            toks = toks[start : len(batch_params.prompt_tokens[i]) + batch_params.max_gen_len]
+            probs = None
+            if batch_params.logprobs:
+                probs = batch.token_logprobs[i][start : len(batch_params.prompt_tokens[i]) + batch_params.max_gen_len]
+            # Truncate after eos if any
+            for stop_token in self.stop_tokens:
+                try:
+                    eos_idx = toks.index(stop_token)
+                    toks = toks[:eos_idx]
+                    probs = probs[:eos_idx] if batch_params.logprobs else None
+                except ValueError:
+                    pass
+            out_tokens.append(toks)
+            out_logprobs.append(probs)
+        return (out_tokens, out_logprobs if batch_params.logprobs else None)
+
+    @torch.inference_mode()
     def generate(
         self,
         prompt_tokens: List[List[int]],
@@ -263,28 +338,8 @@ class Llama:
             should_continue = self.decode(batch, batch_params)
             if not should_continue:
                 break
+        return self.postprocess(batch, batch_params)
 
-        if logprobs:
-            batch.token_logprobs = batch.token_logprobs.tolist()
-        out_tokens, out_logprobs = [], []
-        for i, toks in enumerate(batch.tokens.tolist()):
-            # cut to max gen len
-            start = 0 if echo else len(prompt_tokens[i])
-            toks = toks[start : len(prompt_tokens[i]) + max_gen_len]
-            probs = None
-            if logprobs:
-                probs = batch.token_logprobs[i][start : len(prompt_tokens[i]) + max_gen_len]
-            # cut to after eos tok if any
-            for stop_token in self.stop_tokens:
-                try:
-                    eos_idx = toks.index(stop_token)
-                    toks = toks[:eos_idx]
-                    probs = probs[:eos_idx] if logprobs else None
-                except ValueError:
-                    pass
-            out_tokens.append(toks)
-            out_logprobs.append(probs)
-        return (out_tokens, out_logprobs if logprobs else None)
 
     def text_completion(
         self,

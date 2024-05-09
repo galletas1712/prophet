@@ -359,8 +359,10 @@ class Transformer(nn.Module):
             for i in range(len(start_pos))
         ]
 
+        freq_idxs = torch.tensor(freq_idxs, dtype=torch, device=self.freqs_cis.device)
+
         freqs_cis = torch.gather(
-            self.freqs_cis, torch.tensor(freq_idxs, dtype=torch.long)
+            self.freqs_cis, 
         )
 
         mask = None
