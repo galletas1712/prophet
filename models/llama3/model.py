@@ -133,28 +133,13 @@ class Attention(nn.Module):
             init_method=lambda x: x,
         )
 
-        self.cache_k = torch.zeros(
-            (
-                args.max_batch_size,
-                args.max_seq_len,
-                self.n_local_kv_heads,
-                self.head_dim,
-            )
-        ).cuda()
-        self.cache_v = torch.zeros(
-            (
-                args.max_batch_size,
-                args.max_seq_len,
-                self.n_local_kv_heads,
-                self.head_dim,
-            )
-        ).cuda()
-
     def forward(
         self,
         x: torch.Tensor,
         start_pos: int,
         freqs_cis: torch.Tensor,
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor,
         mask: Optional[torch.Tensor],
     ):
         bsz, seqlen, _ = x.shape
@@ -166,14 +151,13 @@ class Attention(nn.Module):
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
-        self.cache_k = self.cache_k.to(xq)
-        self.cache_v = self.cache_v.to(xq)
+        # cache_k = cache_k.to(xq) # TODO: CHECK moving gpus???
+        # cache_v = cache_v.to(xq)
+        cache_k[:bsz, start_pos: start_pos + seqlen] = xk
+        cache_v[:bsz, start_pos: start_pos + seqlen] = xv
 
-        self.cache_k[:bsz, start_pos: start_pos + seqlen] = xk
-        self.cache_v[:bsz, start_pos: start_pos + seqlen] = xv
-
-        keys = self.cache_k[:bsz, : start_pos + seqlen]
-        values = self.cache_v[:bsz, : start_pos + seqlen]
+        keys = cache_k[:bsz, : start_pos + seqlen]
+        values = cache_v[:bsz, : start_pos + seqlen]
 
         # repeat k/v heads if n_kv_heads < n_heads
         keys = repeat_kv(
@@ -203,17 +187,6 @@ class Attention(nn.Module):
         )  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
-
-    def forward_with_kv_cache(
-        self,
-        x: torch.Tensor,
-        start_pos: int,
-        freqs_cis: torch.Tensor,
-        batched_kv_cache: torch.Tensor,
-        mask: Optional[torch.Tensor],
-    ):
-        pass
-
 
 class FeedForward(nn.Module):
     def __init__(
@@ -280,29 +253,15 @@ class TransformerBlock(nn.Module):
         x: torch.Tensor,
         start_pos: int,
         freqs_cis: torch.Tensor,
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor,
         mask: Optional[torch.Tensor],
     ):
         h = x + self.attention(
-            self.attention_norm(x), start_pos, freqs_cis, mask
+            self.attention_norm(x), start_pos, freqs_cis, cache_k, cache_v, mask,
         )
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
-
-    def forward_with_kv_cache(
-        self,
-        x: torch.Tensor,
-        start_pos: List[int],
-        freqs_cis: torch.Tensor,
-        batched_kv_cache: torch.Tensor,
-        mask: Optional[torch.Tensor],
-    ):
-        h = x + self.attention.forward_with_kv_cache(
-            self.attention_norm(
-                x), start_pos, freqs_cis, batched_kv_cache, mask
-        )
-        out = h + self.feed_forward(self.ffn_norm(h))
-        return out
-
 
 class Transformer(nn.Module):
     def __init__(self, params: ModelArgs):
@@ -331,67 +290,7 @@ class Transformer(nn.Module):
         )
 
     @torch.inference_mode()
-    def forward_with_kv_cache(
-        self,
-        tokens: torch.Tensor,
-        padding_start: List[int],
-        start_pos: List[int],
-        batched_kv_cache: torch.Tensor,
-    ):
-        """Runs inference using a user-provided KV cache.
-
-        Args
-            tokens: Shape (batch_size, seq_len) of token ids padded to have
-                equal seq_len.
-            padding_start: Shape (batch_size,) giving the first index of each
-                item in the batch that is padding.
-            start_pos: Shape (batch_size,) giving where in its sequence each
-                item of the batch is starting at.
-            batched_kv_cache: Shape (batch_size, seq_len, model_dim) padded to
-                have equal seq_len.
-        """
-
-        _bsz, seqlen = tokens.shape
-        h = self.tok_embeddings(tokens)
-
-        self.freqs_cis = self.freqs_cis.to(h.device)
-
-        freq_idxs = [
-            list(range(start_pos[i], start_pos[i] + seqlen))
-            for i in range(len(start_pos))
-        ]
-
-        freq_idxs = torch.tensor(
-            freq_idxs, dtype=torch, device=self.freqs_cis.device)
-
-        freqs_cis = torch.gather(
-            self.freqs_cis,
-        )
-
-        mask = None
-        if seqlen > 1:
-            mask = torch.full(
-                (seqlen, seqlen), float("-inf"), device=tokens.device
-            )
-
-            mask = torch.triu(mask, diagonal=1)
-
-            # When performing key-value caching, we compute the attention scores
-            # only for the new sequence. Thus, the matrix of scores is of size
-            # (seqlen, cache_len + seqlen), and the only masked entries are (i, j) for
-            # j > cache_len + i, since row i corresponds to token cache_len + i.
-            mask = torch.hstack(
-                [torch.zeros((seqlen, start_pos), device=tokens.device), mask]
-            ).type_as(h)
-
-        for layer in self.layers:
-            h = layer.forward_with_kv_cache(h, start_pos, freqs_cis, mask)
-        h = self.norm(h)
-        output = self.output(h).float()
-        return output
-
-    @torch.inference_mode()
-    def forward(self, tokens: torch.Tensor, start_pos: int):
+    def forward(self, tokens: torch.Tensor, start_pos: int, cache_k: torch.Tensor, cache_v: torch.Tensor):
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
         self.freqs_cis = self.freqs_cis.to(h.device)
@@ -413,8 +312,8 @@ class Transformer(nn.Module):
                 [torch.zeros((seqlen, start_pos), device=tokens.device), mask]
             ).type_as(h)
 
-        for layer in self.layers:
-            h = layer(h, start_pos, freqs_cis, mask)
+        for layer_id, layer in enumerate(self.layers):
+            h = layer(h, start_pos, freqs_cis, cache_k[:, :, layer_id], cache_v[:, :, layer_id], mask)
         h = self.norm(h)
         output = self.output(h).float()
         return output

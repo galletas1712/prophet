@@ -50,6 +50,7 @@ class GlobalGenerationParams:
 class ModelParams:
     max_batch_size: int
     max_seq_len: int
+    n_layers: int
     n_local_kv_heads: int
     head_dim: int
 
@@ -101,6 +102,7 @@ class LlamaPrefillBatchState:
         kv_dim = (
             params.max_batch_size,
             params.max_seq_len,
+            params.n_layers,
             params.n_local_kv_heads,
             params.head_dim,
         )
@@ -145,6 +147,7 @@ class LlamaDecodeBatchState:
         kv_dim = (
             params.max_batch_size,
             params.max_seq_len,
+            params.n_layers,
             params.n_local_kv_heads,
             params.head_dim,
         )
@@ -269,6 +272,7 @@ class Llama:
         model_params = ModelParams(
             max_batch_size,
             max_seq_len,
+            model_args.n_layers,
             n_local_kv_heads,
             head_dim,
         )
@@ -292,7 +296,7 @@ class Llama:
         # NOTE: Prefill only up to min_prompt_len. In decode, we're going to wait until it catches up to the others
         # TODO: just fill to max_prompt_len and pad KV cache
         logits = self.model.forward(
-            batch_state.tokens[:, :batch_state.min_prompt_len], 0)
+            batch_state.tokens[:, :batch_state.min_prompt_len], 0, batch_state.cache_k, batch_state.cache_v)
         if self.glob_params.temperature > 0:  # TODO: check how this would work for scatter
             probs = torch.softmax(
                 logits[:, -1] / self.glob_params.temperature, dim=-1)
@@ -320,7 +324,7 @@ class Llama:
     def step_decode(self, batch_state: LlamaDecodeBatchState, prev_pos: int):
         logits = self.model.forward(
             # TODO: check OOB
-            batch_state.tokens[:, prev_pos:prev_pos + 1], prev_pos)
+            batch_state.tokens[:, prev_pos:prev_pos + 1], prev_pos, batch_state.cache_k, batch_state.cache_v)
         if self.glob_params.temperature > 0:  # TODO: check how this would work for scatter
             probs = torch.softmax(
                 logits[:, -1] / self.glob_params.temperature, dim=-1)
