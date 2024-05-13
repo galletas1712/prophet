@@ -4,6 +4,7 @@
 from typing import List, Optional
 
 from models.llama3 import Dialog, Llama
+from models.llama3.generation import GlobalGenerationParams
 
 
 def main(
@@ -31,6 +32,13 @@ def main(
         tokenizer_path=tokenizer_path,
         max_seq_len=max_seq_len,
         max_batch_size=max_batch_size,
+        glob_params=GlobalGenerationParams(
+            max_gen_len=max_gen_len,
+            temperature=temperature,
+            top_p=top_p,
+            logprobs=False,
+            echo=False
+        )
     )
 
     dialogs: List[Dialog] = [
@@ -62,12 +70,7 @@ These are just a few of the many attractions that Paris has to offer. With so mu
             {"role": "user", "content": "How to go from Beijing to NY?"},
         ],
     ]
-    results = generator.chat_completion(
-        dialogs,
-        max_gen_len=max_gen_len,
-        temperature=temperature,
-        top_p=top_p,
-    )
+    results = generator.chat_completion(dialogs)
 
     for dialog, result in zip(dialogs, results):
         for msg in dialog:

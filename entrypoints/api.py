@@ -1,7 +1,6 @@
+from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, List
-
-import torch
 
 
 class RequestStage(Enum):
@@ -10,29 +9,8 @@ class RequestStage(Enum):
     DONE = 2
 
 
+@dataclass
 class Request:
-    def __init__(
-        self,
-        request_id: int,
-        prompt: str,
-        prompt_tokens: Optional[List[int]] = None,
-        stage: RequestStage = RequestStage.PREFILL,
-        kv_cache: Optional[torch.tensor] = None,
-    ):
-        self.request_id = request_id
-        
-        self.prompt = prompt
-        self.prompt_tokens = prompt_tokens
-
-        self.output = ""
-        self.output_tokens = []
-
-        self.full_text = prompt
-        self.all_tokens = prompt_tokens
-        
-        self.stage = stage
-        self.kv_cache = kv_cache
-
-    def move_kv_cache(self, target_rank):
-        self.stage = RequestStage.DECODE
-        # TODO: move kv cache to deivce with target_rank
+    prompt_tokens: List[int]
+    curr_idx_in_batch: Optional[int] = None
+    stage: RequestStage = RequestStage.PREFILL

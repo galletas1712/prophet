@@ -1,6 +1,9 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed in accordance with the terms of the Llama 3 Community License Agreement.
 
+# import pdb
+import fairscale.nn.model_parallel.initialize as fs_init
+
 from dataclasses import dataclass
 import json
 import os
@@ -17,6 +20,7 @@ from fairscale.nn.model_parallel.initialize import (
     model_parallel_is_initialized,
 )
 
+from entrypoints.api import Request, RequestStage
 from models.llama3.model import ModelArgs, Transformer
 from models.llama3.tokenizer import ChatFormat, Dialog, Message, Tokenizer
 
@@ -33,25 +37,135 @@ class ChatPrediction(TypedDict, total=False):
     logprobs: List[float]  # not required
 
 @dataclass
-class LlamaBatchParams:
-    prompt_tokens: List[List[int]]
-    max_gen_len: int
+class GlobalGenerationParams:
+    max_gen_len: Optional[int]
     temperature: float = 0.6,
     top_p: float = 0.9,
     logprobs: bool = False,
     echo: bool = False,
 
 @dataclass
-class LlamaBatch:
+class ModelParams:
+    max_batch_size: int
+    max_seq_len: int
+    n_local_kv_heads: int
+    head_dim: int
+
+@dataclass
+class LlamaPrefillBatchState:
+    next_pos: torch.Tensor # (bsz) next position to fill in the prompt
     min_prompt_len: int
     max_prompt_len: int
-    total_len: int
-    tokens: torch.Tensor
-    token_logprobs: Optional[torch.Tensor]
-    prev_pos: int
-    eos_reached: torch.Tensor
-    input_text_mask: torch.Tensor
 
+    tokens: torch.Tensor # (bsz, max_seq_len) token IDs
+    token_logprobs: Optional[torch.Tensor] # (bsz, max_seq_len) log probabilities 
+    input_mask: torch.Tensor # (bsz, max_seq_len) true is token is not padding.
+    eos_reached: torch.Tensor # (bsz) true if EOS token has been generated
+    cache_k: torch.Tensor # Global k cache. We will always read/write to this tensor and pass entries over RPC
+    cache_v: torch.Tensor # Same for v cache
+
+    def __init__(
+        self,
+        prompt_tokens: List[List[int]],
+        logprobs: bool,
+        params: ModelParams,
+        tokenizer: Tokenizer,
+    ):
+        bsz = len(prompt_tokens)
+        assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
+
+        # NOTE: TODO: need to actually USE this. We're just gonna preallocate a max_prompt_len in decode for now
+        self.next_pos = torch.tensor([len(t) for t in prompt_tokens])
+
+        self.min_prompt_len = torch.min(self.next_pos).item()
+        self.max_prompt_len = torch.max(self.next_pos).item()
+        assert self.max_prompt_len <= params.max_seq_len
+
+        # NOTE: Here we only allocate for this batch size and for max_prompt_len + 1 (to add next token after prefill) within this batch
+        self.tokens = torch.full((bsz, self.max_prompt_len + 1), tokenizer.pad_id, dtype=torch.long, device="cuda")
+        for k, t in enumerate(prompt_tokens):
+            self.tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
+        if logprobs:
+            self.token_logprobs = torch.zeros_like(self.tokens, dtype=torch.float)
+        self.input_mask = self.tokens != tokenizer.pad_id
+        self.eos_reached = torch.tensor([False] * bsz, device="cuda")
+        kv_dim = (
+            params.max_batch_size,
+            params.max_seq_len,
+            params.n_local_kv_heads,
+            params.head_dim,
+        )
+        self.cache_k = torch.zeros(kv_dim).cuda()
+        self.cache_v = torch.zeros(kv_dim).cuda()
+
+@dataclass
+class LlamaDecodeBatchState:
+    logprobs: bool
+    params: ModelParams
+    tokenizer: Tokenizer
+
+    requests: List[Optional[Request]] # Fixed size list of requests in the batch. Some entries may be inactive
+    tokens: torch.Tensor # (bsz, max_seq_len) token IDs
+    token_logprobs: Optional[torch.Tensor] # (bsz, max_seq_len) log probabilities 
+    input_mask: torch.Tensor # (bsz, max_seq_len) true is token is not padding.
+    eos_reached: torch.Tensor # (bsz) true if EOS token has been generated
+    cache_k: torch.Tensor # Global k cache. We will always read/write to this tensor and pass entries over RPC
+    cache_v: torch.Tensor # Same for v cache
+
+    def __init__(self, logprobs: bool, params: ModelParams, tokenizer: Tokenizer):
+        self.logprobs = logprobs
+        self.params = params
+        self.tokenizer = tokenizer
+        
+        self.requests = [None for _ in range(params.max_batch_size)]
+        # NOTE: Here we allocate for MAX batch size and MAX seq len
+        self.tokens = torch.full((params.max_batch_size, params.max_seq_len), tokenizer.pad_id, dtype=torch.long, device="cuda")
+        if logprobs:
+            self.token_logprobs = torch.zeros_like(self.tokens, dtype=torch.float)
+        self.input_mask = torch.zeros_like(self.tokens, dtype=torch.bool, device="cuda")
+        self.eos_reached = torch.tensor([True] * params.max_batch_size, device="cuda") # NOTE: important
+        kv_dim = (
+            params.max_batch_size,
+            params.max_seq_len,
+            params.n_local_kv_heads,
+            params.head_dim,
+        )
+        self.cache_k = torch.zeros(kv_dim).cuda()
+        self.cache_v = torch.zeros(kv_dim).cuda()
+
+    def fill_slot(
+        self,
+        idx: int,
+        request: Request,
+        input_len_after_prefill: int,
+        prompt_tokens: List[int],
+        tokens: torch.Tensor,
+        input_mask: torch.Tensor,
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor,
+    ): # TODO: recheck sending KV cache over
+        assert len(prompt_tokens) <= self.tokens.shape[1]
+        request.stage = RequestStage.DECODE
+        request.curr_idx_in_batch = idx
+        self.requests[idx] = request
+        self.tokens[idx, :input_len_after_prefill] = tokens[:input_len_after_prefill].clone() # TODO: over RPC
+        self.input_mask[idx, :input_len_after_prefill] = input_mask[:input_len_after_prefill].clone() # TODO: omit entirely to optimize
+        self.cache_k[idx, :input_len_after_prefill] = cache_k[:input_len_after_prefill].clone() # TODO: over RPC
+        self.cache_v[idx, :input_len_after_prefill] = cache_v[:input_len_after_prefill].clone() # TODO: over RPC
+        self.eos_reached[idx] = False # TODO: assert EOS is not reached yet
+        return request
+    
+    def clear_slot(self, idx: int):
+        self.requests[idx].curr_idx_in_batch = None
+        self.requests[idx].stage = RequestStage.DONE
+        self.requests[idx] = None
+        self.tokens[idx, :] = self.tokenizer.pad_id
+        self.input_mask[idx, :] = False
+        self.eos_reached[idx] = True
+        self.cache_k[idx, :] = 0
+        self.cache_v[idx, :] = 0
+
+    
 class Llama:
     @staticmethod
     def build(
@@ -59,6 +173,7 @@ class Llama:
         tokenizer_path: str,
         max_seq_len: int,
         max_batch_size: int,
+        glob_params: GlobalGenerationParams,
         model_parallel_size: Optional[int] = None,
         seed: int = 1,
     ) -> "Llama":
@@ -125,191 +240,105 @@ class Llama:
         model.load_state_dict(checkpoint, strict=False)
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
 
-        return Llama(model, tokenizer)
+        n_local_kv_heads = model_args.n_kv_heads // fs_init.get_model_parallel_world_size()
+        head_dim = model_args.dim // model_args.n_heads
 
-    def __init__(self, model: Transformer, tokenizer: Tokenizer):
+        model_params = ModelParams(
+            max_batch_size,
+            max_seq_len,
+            n_local_kv_heads,
+            head_dim,
+        )
+
+        return Llama(model, tokenizer, model_params, glob_params)
+
+    def __init__(self, model: Transformer, tokenizer: Tokenizer, model_params: ModelParams, glob_params: GlobalGenerationParams):
         self.model = model
         self.tokenizer = tokenizer
+        self.model_params = model_params
+        self.glob_params = glob_params
+        if self.glob_params.max_gen_len is None: # TODO: redo this!
+            self.glob_params.max_gen_len = self.model_params.max_seq_len - 1
         self.stop_tokens = torch.tensor(list(tokenizer.stop_tokens))
         self.formatter = ChatFormat(tokenizer)
-
+    
     @torch.inference_mode()
-    def prepare_batch(
-        self,
-        batch_params: LlamaBatchParams,
-    ):
-        params = self.model.params
-        bsz = len(batch_params.prompt_tokens)
-        assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
-
-        min_prompt_len = min(len(t) for t in batch_params.prompt_tokens)
-        max_prompt_len = max(len(t) for t in batch_params.prompt_tokens)
-        assert max_prompt_len <= params.max_seq_len
-        total_len = min(params.max_seq_len, batch_params.max_gen_len + max_prompt_len)
-
-        pad_id = self.tokenizer.pad_id
-        tokens = torch.full((bsz, total_len), pad_id, dtype=torch.long, device="cuda")
-        token_logprobs = None
-        for k, t in enumerate(batch_params.prompt_tokens):
-            tokens[k, : len(t)] = torch.tensor(t, dtype=torch.long, device="cuda")
-        if batch_params.logprobs:
-            token_logprobs = torch.zeros_like(tokens, dtype=torch.float)
-
-        prev_pos = 0
-        eos_reached = torch.tensor([False] * bsz, device="cuda")
-        input_text_mask = tokens != pad_id
-
-        batch = LlamaBatch(
-            min_prompt_len=min_prompt_len,
-            max_prompt_len=max_prompt_len,
-            total_len=total_len,
-            tokens=tokens,
-            token_logprobs=token_logprobs,
-            prev_pos=prev_pos,
-            eos_reached=eos_reached,
-            input_text_mask=input_text_mask,
-        )
-        return batch
-
-    # def batch_tensors(seq_len, aux_dim, tensors: List[torch.Tensor]):
-    #     bsz = len(tensors)
-
-    #     batched_tensor = torch.zeros(
-    #         (bsz, seq_len, aux_dim),
-    #         dtype=tensors[0].dtype,
-    #         device=tensors[0].device    # TODO: Disaggregate.
-    #     )
-
-    #     for idx in range(bsz):
-    #         batched_tensor[idx, :tensors[idx].size[0], :] =  tensors[idx]
-    #     return batched_tensor
-
-    # @torch.inference_mode()
-    # def step(
-    #     self,
-    #     tokens: List[List[int]],
-    #     k_caches: List[torch.tensor],
-    #     v_caches: List[torch.tensor],
-    #     batch_params: LlamaBatchParams,
-    # ):
-    #     """
-    #     tokens:
-    #     - The ith element is the new tokens for the ith request in the batch. If
-    #       we are doing a decode step, it is just one token (the last one that 
-    #       was sampled).
-    #     """
-    #     # Pack the kv caches into a batch.
-    #     params = self.model.params
-    #     bsz = len(batch_params.prompt_tokens)
-    #     assert bsz <= params.max_batch_size, (bsz, params.max_batch_size)
-
-    #     max_prompt_len = max(len(t) for t in batch_params.prompt_tokens)
-    #     assert max_prompt_len <= params.max_seq_len
-    #     total_max_len = params.max_seq_len + batch_params.max_gen_len
-
-    #     batched_k_caches = torch.stack(k_caches)
-    #     batched_v_caches = torch.stack(v_caches)
-    #             # Pack the input tokens into a batch.
-    #     max_prompt_len = max([len(seq_tokens) for seq_tokens in tokens])
-
-    #     pad_id = self.tokenizer.pad_id
-    #     padded_tokens = torch.full((bsz, max_prompt_len), pad_id, dtype=torch.long, device="cuda")
-    #     for k, t in enumerate(tokens):
-    #         padded_tokens[k, : len(t)] = \
-    #         torch.tensor(t, dtype=torch.long, device="cuda")
-    #         # Keep track of the indices of the first padding tokens in the kv cache.
-    #     padding_start = []
-    #     for t in prompt_tokens:
-    #         padding_start.append(len(t))
-    #             # Keep track of the start positions.
-    #     # start_pos = 
-    @torch.inference_mode()
-    def step(
-        self,
-        batch: LlamaBatch,
-        batch_params: LlamaBatchParams,
-        right_edge: int,
-    ):
-        logits = self.model.forward(batch.tokens[:, batch.prev_pos:right_edge], batch.prev_pos)
-        if batch_params.temperature > 0:
-            probs = torch.softmax(logits[:, -1] / batch_params.temperature, dim=-1)
-            next_token = sample_top_p(probs, batch_params.top_p)
+    def step_prefill(self, prompt_tokens: List[List[int]]):
+        batch_state = LlamaPrefillBatchState(prompt_tokens, self.glob_params.logprobs, self.model_params, self.tokenizer)
+        # NOTE: Prefill only up to min_prompt_len. In decode, we're going to wait until it catches up to the others
+        # TODO: just fill to max_prompt_len and pad KV cache
+        logits = self.model.forward(batch_state.tokens[:, :batch_state.min_prompt_len], 0)
+        if self.glob_params.temperature > 0: # TODO: check how this would work for scatter
+            probs = torch.softmax(logits[:, -1] / self.glob_params.temperature, dim=-1)
+            next_token = sample_top_p(probs, self.glob_params.top_p)
         else:
             next_token = torch.argmax(logits[:, -1], dim=-1)
-
+        
         next_token = next_token.reshape(-1)
-        # only replace token if prompt has already been generated
         next_token = torch.where(
-            batch.input_text_mask[:, right_edge], batch.tokens[:, right_edge], next_token
+            batch_state.input_mask[:, batch_state.min_prompt_len], batch_state.tokens[:, batch_state.min_prompt_len], next_token
         )
-        batch.tokens[:, right_edge] = next_token
-        if batch_params.logprobs:
-            batch.token_logprobs[:, batch.prev_pos + 1 : right_edge + 1] = -F.cross_entropy(
-                input=logits.transpose(1, 2),
-                target=batch.tokens[:, batch.prev_pos + 1 : right_edge + 1],
-                reduction="none",
-                ignore_index=self.tokenizer.pad_id,
-            )
-        batch.eos_reached |= (~batch.input_text_mask[:, right_edge]) & (
-            torch.isin(next_token, self.stop_tokens)
-        )
-        batch.prev_pos = right_edge
-
-    @torch.inference_mode()
-    def prefill(self, batch: LlamaBatch, batch_params: LlamaBatchParams):
-        if batch.min_prompt_len == batch.total_len: # No need to generate
-            # NOTE: this is a bit intricate. Don't produce next token because we didn't allocate space for it!
-            logits = self.model.forward(batch.tokens, batch.prev_pos)
-            batch.token_logprobs = -F.cross_entropy(
-                input=logits.transpose(1, 2),
-                target=batch.tokens,
-                reduction="none",
-                ignore_index=batch.pad_id,
+        if self.glob_params.max_gen_len > 0 or batch_state.min_prompt_len < self.model_params.max_seq_len:
+            batch_state.tokens[:, batch_state.min_prompt_len] = next_token # TODO: replace max_prompt_len for scatter
+            batch_state.eos_reached |= (~batch_state.input_mask[:, batch_state.min_prompt_len]) & (
+                torch.isin(next_token, self.stop_tokens)
             )
         else:
-            # NOTE: no chunked prefilled here.
-            self.step(batch, batch_params, batch.min_prompt_len)
+            batch_state.eos_reached[:] = True
+        # TODO: logprobs
+        return batch_state
+    
+    @torch.inference_mode()
+    def step_decode(self, batch_state: LlamaDecodeBatchState, prev_pos: int):
+        logits = self.model.forward(batch_state.tokens[:, prev_pos:prev_pos + 1], prev_pos) # TODO: check OOB
+        if self.glob_params.temperature > 0: # TODO: check how this would work for scatter
+            probs = torch.softmax(logits[:, -1] / self.glob_params.temperature, dim=-1)
+            next_token = sample_top_p(probs, self.glob_params.top_p)
+        else:
+            next_token = torch.argmax(logits[:, -1], dim=-1)
+        next_token = next_token.reshape(-1)
+        next_token = torch.where(
+            batch_state.input_mask[:, prev_pos+1], batch_state.tokens[:, prev_pos+1], next_token
+        )
+        # TODO: redo boundary conditions
+        batch_state.tokens[:, prev_pos + 1] = next_token # TODO: replace max_prompt_len for scatter
+        batch_state.eos_reached |= (~batch_state.input_mask[:, prev_pos + 1]) & (
+            torch.isin(next_token, self.stop_tokens)
+        )
+        # TODO: logprobs EVERYWHERE!
 
     @torch.inference_mode()
-    def decode(self, batch: LlamaBatch, batch_params: LlamaBatchParams):
-        if all(batch.eos_reached) or batch.prev_pos == batch.total_len - 1:
-            return False
-        self.step(batch, batch_params, batch.prev_pos + 1)
-        return True
-
-    @torch.inference_mode()
-    def postprocess(self, batch: LlamaBatch, batch_params: LlamaBatchParams):
-        if batch_params.logprobs:
-            batch.token_logprobs = batch.token_logprobs.tolist()
+    def postprocess(self, batch: LlamaDecodeBatchState):
+        if self.glob_params.logprobs:
+            token_logprobs = batch.token_logprobs.tolist()
         out_tokens, out_logprobs = [], []
         for i, toks in enumerate(batch.tokens.tolist()):
+            if batch.requests[i] is None:
+                out_tokens.append([])
+                out_logprobs.append([])
+                continue
             # Truncate to max gen len
-            start = 0 if batch_params.echo else len(batch_params.prompt_tokens[i])
-            toks = toks[start : len(batch_params.prompt_tokens[i]) + batch_params.max_gen_len]
+            start = 0 if self.glob_params.echo else len(batch.requests[i].prompt_tokens)
+            toks = toks[start : len(batch.requests[i].prompt_tokens) + self.glob_params.max_gen_len]
             probs = None
-            if batch_params.logprobs:
-                probs = batch.token_logprobs[i][start : len(batch_params.prompt_tokens[i]) + batch_params.max_gen_len]
+            if self.glob_params.logprobs:
+                probs = token_logprobs[i][start : len(batch.requests[i].prompt_tokens) + self.glob_params.max_gen_len]
             # Truncate after eos if any
             for stop_token in self.stop_tokens:
                 try:
                     eos_idx = toks.index(stop_token)
                     toks = toks[:eos_idx]
-                    probs = probs[:eos_idx] if batch_params.logprobs else None
+                    probs = probs[:eos_idx] if self.glob_params.logprobs else None
                 except ValueError:
                     pass
             out_tokens.append(toks)
             out_logprobs.append(probs)
-        return (out_tokens, out_logprobs if batch_params.logprobs else None)
+        return (out_tokens, out_logprobs if self.glob_params.logprobs else None)
 
     @torch.inference_mode()
     def generate(
         self,
         prompt_tokens: List[List[int]],
-        max_gen_len: int,
-        temperature: float = 0.6,
-        top_p: float = 0.9,
-        logprobs: bool = False,
-        echo: bool = False,
     ) -> Tuple[List[List[int]], Optional[List[List[float]]]]:
         """
         Generate text sequences based on provided prompts using the language generation model.
@@ -330,25 +359,40 @@ class Llama:
             If logprobs is True, token log probabilities are computed for each generated token.
 
         """
+        requests = [Request(prompt_tokens[i]) for i in range(len(prompt_tokens))]
+        prefill_batch_state = self.step_prefill(prompt_tokens)
+        bsz = len(prompt_tokens)
 
-        batch_params = LlamaBatchParams(prompt_tokens, max_gen_len, temperature, top_p, logprobs, echo)
-        batch = self.prepare_batch(batch_params) 
-        self.prefill(batch, batch_params)
-        while True:
-            should_continue = self.decode(batch, batch_params)
-            if not should_continue:
-                break
-        return self.postprocess(batch, batch_params)
-
+        decode_batch_state = LlamaDecodeBatchState(self.glob_params.logprobs, self.model_params, self.tokenizer)
+        for b in range(bsz):
+            if not prefill_batch_state.eos_reached[b]:
+                decode_batch_state.fill_slot(
+                    b,
+                    requests[b],
+                    # NOTE: In original Llama code, we're going to wait until it the slowest one catches up in the decode pool
+                    max(prefill_batch_state.min_prompt_len + 1, len(prompt_tokens[b])),
+                    prompt_tokens[b],
+                    prefill_batch_state.tokens[b, :],
+                    prefill_batch_state.input_mask[b, :],
+                    prefill_batch_state.cache_k[b, :],
+                    prefill_batch_state.cache_v[b, :]
+                )
+        
+        prev_pos = prefill_batch_state.min_prompt_len
+        # NOTE: EOS and boundary conditions might have to be completely redone here and above
+        while not torch.all(decode_batch_state.eos_reached) and prev_pos < self.model.params.max_seq_len - 1:
+            self.step_decode(decode_batch_state, prev_pos)
+            # NOTE: Can't do this yet because it would just clear and we won't get any results.
+            # for b in range(bsz):
+            #     if decode_batch_state.requests[b] is not None and decode_batch_state.eos_reached[b]: # TODO: what about when max len reached?
+                    # decode_batch_state.clear_slot(b)
+            prev_pos += 1
+        
+        return self.postprocess(decode_batch_state)
 
     def text_completion(
         self,
         prompts: List[str],
-        temperature: float = 0.6,
-        top_p: float = 0.9,
-        max_gen_len: Optional[int] = None,
-        logprobs: bool = False,
-        echo: bool = False,
     ) -> List[CompletionPrediction]:
         """
         Perform text completion for a list of prompts using the language generation model.
@@ -370,18 +414,11 @@ class Llama:
             If logprobs is True, token log probabilities are computed for each generated token.
 
         """
-        if max_gen_len is None:
-            max_gen_len = self.model.params.max_seq_len - 1
         prompt_tokens = [self.tokenizer.encode(x, bos=True, eos=False) for x in prompts]
         generation_tokens, generation_logprobs = self.generate(
             prompt_tokens=prompt_tokens,
-            max_gen_len=max_gen_len,
-            temperature=temperature,
-            top_p=top_p,
-            logprobs=logprobs,
-            echo=echo,
         )
-        if logprobs:
+        if self.glob_params.logprobs:
             return [
                 {
                     "generation": self.tokenizer.decode(t),
@@ -395,10 +432,6 @@ class Llama:
     def chat_completion(
         self,
         dialogs: List[Dialog],
-        temperature: float = 0.6,
-        top_p: float = 0.9,
-        max_gen_len: Optional[int] = None,
-        logprobs: bool = False,
     ) -> List[ChatPrediction]:
         """
         Generate assistant responses for a list of conversational dialogs using the language generation model.
@@ -419,20 +452,13 @@ class Llama:
             It employs nucleus sampling to introduce controlled randomness in text generation.
             If logprobs is True, token log probabilities are computed for each generated token.
         """
-        if max_gen_len is None:
-            max_gen_len = self.model.params.max_seq_len - 1
-
         prompt_tokens = [
             self.formatter.encode_dialog_prompt(dialog) for dialog in dialogs
         ]
         generation_tokens, generation_logprobs = self.generate(
             prompt_tokens=prompt_tokens,
-            max_gen_len=max_gen_len,
-            temperature=temperature,
-            top_p=top_p,
-            logprobs=logprobs,
         )
-        if logprobs:
+        if self.glob_params.logprobs:
             return [
                 {
                     "generation": {
