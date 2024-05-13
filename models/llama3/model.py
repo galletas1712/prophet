@@ -62,7 +62,8 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
     assert 0 <= 1 < ndim
     assert freqs_cis.shape == (x.shape[1], x.shape[-1])
-    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+    shape = [d if i == 1 or i == ndim -
+             1 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(*shape)
 
 
@@ -168,8 +169,8 @@ class Attention(nn.Module):
         self.cache_k = self.cache_k.to(xq)
         self.cache_v = self.cache_v.to(xq)
 
-        self.cache_k[:bsz, start_pos : start_pos + seqlen] = xk
-        self.cache_v[:bsz, start_pos : start_pos + seqlen] = xv
+        self.cache_k[:bsz, start_pos: start_pos + seqlen] = xk
+        self.cache_v[:bsz, start_pos: start_pos + seqlen] = xv
 
         keys = self.cache_k[:bsz, : start_pos + seqlen]
         values = self.cache_v[:bsz, : start_pos + seqlen]
@@ -296,7 +297,8 @@ class TransformerBlock(nn.Module):
         mask: Optional[torch.Tensor],
     ):
         h = x + self.attention.forward_with_kv_cache(
-            self.attention_norm(x), start_pos, freqs_cis, batched_kv_cache, mask
+            self.attention_norm(
+                x), start_pos, freqs_cis, batched_kv_cache, mask
         )
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
@@ -359,10 +361,11 @@ class Transformer(nn.Module):
             for i in range(len(start_pos))
         ]
 
-        freq_idxs = torch.tensor(freq_idxs, dtype=torch, device=self.freqs_cis.device)
+        freq_idxs = torch.tensor(
+            freq_idxs, dtype=torch, device=self.freqs_cis.device)
 
         freqs_cis = torch.gather(
-            self.freqs_cis, 
+            self.freqs_cis,
         )
 
         mask = None
@@ -392,7 +395,7 @@ class Transformer(nn.Module):
         _bsz, seqlen = tokens.shape
         h = self.tok_embeddings(tokens)
         self.freqs_cis = self.freqs_cis.to(h.device)
-        freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
+        freqs_cis = self.freqs_cis[start_pos: start_pos + seqlen]
 
         mask = None
         if seqlen > 1:

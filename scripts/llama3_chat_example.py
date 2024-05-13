@@ -76,9 +76,12 @@ These are just a few of the many attractions that Paris has to offer. With so mu
         for msg in dialog:
             print(f"{msg['role'].capitalize()}: {msg['content']}\n")
         print(
-            f"> {result['generation']['role'].capitalize()}: {result['generation']['content']}"
+            f"> {result['generation']['role'].capitalize()}: {
+                result['generation']['content']}"
         )
         print("\n==================================\n")
 
+
 if __name__ == '__main__':
-    main(ckpt_dir='/home/ubuntu/project/model_weights/Meta-Llama-3-8B-Instruct', tokenizer_path='/home/ubuntu/project/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model')
+    main(ckpt_dir='/home/ubuntu/project/model_weights/Meta-Llama-3-8B-Instruct',
+         tokenizer_path='/home/ubuntu/project/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model')
