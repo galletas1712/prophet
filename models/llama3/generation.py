@@ -73,7 +73,8 @@ class DataBatch:
     input_tokens: torch.Tensor
 
     # Index of the first padding token in the input tokens for each sample in
-    # the batch. Has shape (batch_size,).
+    # the batch. If no padding, it is the index right after the last index of
+    # the sample. Has shape (batch_size,).
     first_pad_idx: torch.Tensor
 
     # TODO: Log probs of the input_tokens and the output token. Has shape
@@ -263,6 +264,7 @@ class Llama:
     ):
         self.model = model
         self.tokenizer = tokenizer
+
         self.model_params = model_params
 
         self.glob_params = glob_params
@@ -271,7 +273,7 @@ class Llama:
 
         self.stop_tokens = torch.tensor(list(tokenizer.stop_tokens))
         self.formatter = ChatFormat(tokenizer)
-    
+
     def kv_cache_shape(self):
         return self.model.kv_cache_shape
 
@@ -283,17 +285,22 @@ class Llama:
         for request in requests:
             if request.stage == RequestStage.PREFILL:
                 prefill_requests.append(request)
-            elif request.stage == RequestStage.PREFILL:
+            elif request.stage == RequestStage.DECODE:
                 decode_requests.append(request)
 
-        self.step_prefill(prefill_requests)
-        self.step_prefill(decode_requests)
+        if len(prefill_requests) > 0:
+            self.step_prefill(prefill_requests)
+
+        if len(decode_requests) > 0:
+            self.step_prefill(decode_requests)
 
     @torch.inference_mode()
     def step_prefill(self, requests: List[Request]):
         # Tokenize inputs.
         for request in requests:
-            request.prompt_tokens = self.tokenizer.encode(request.prompt_str)
+            request.prompt_tokens = self.tokenizer.encode(
+                request.prompt_str, bos=True, eos=False
+            )
 
         # Form the batch.
         prefill_batch = DataBatch(
@@ -304,12 +311,13 @@ class Llama:
         logits = self.model.forward(
             prefill_batch.input_tokens,
             prefill_batch.start_pos,
-            prefill_batch.pad_mask,
+            prefill_batch.first_pad_idx,
             prefill_batch.cache_k,
             prefill_batch.cache_v,
         )
 
         self.sample_and_add_token(requests, logits)
+        self.update_kv_cache(requests, prefill_batch)
 
     @torch.inference_mode()
     def step_decode(self, requests: List[Request]):
@@ -322,12 +330,13 @@ class Llama:
         logits = self.model.forward(
             decode_batch.input_tokens,
             decode_batch.start_pos,
-            decode_batch.pad_mask,
+            decode_batch.first_pad_idx,
             decode_batch.cache_k,
             decode_batch.cache_v,
         )
 
         self.sample_and_add_token(requests, logits)
+        self.update_kv_cache(requests, decode_batch)
 
     def sample_and_add_token(
         self, requests: List[Request], logits: torch.Tensor
@@ -344,7 +353,7 @@ class Llama:
         next_token = next_token.reshape(-1).cpu().numpy()
 
         # Mutate requests with new tokens.
-        for request_idx, request in requests:
+        for request_idx, request in enumerate(requests):
             curr_next_token = next_token[request_idx]
             request.output_tokens.append(curr_next_token)
 
@@ -362,6 +371,11 @@ class Llama:
             # Generation needs to continue so set stage to DECODE.
             else:
                 request.stage = RequestStage.DECODE
+
+    def update_kv_cache(self, requests: List[Request], batch: DataBatch):
+        for request_idx, request in enumerate(requests):
+            request.cache_k = batch.cache_k[request_idx, ...]
+            request.cache_v = batch.cache_v[request_idx, ...]
 
 
 def sample_top_p(probs, p):

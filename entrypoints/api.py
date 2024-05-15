@@ -36,9 +36,9 @@ class Request:
         self.output_tokens = []
 
         self.cache_k = torch.zeros(
-            kv_cache_shape, dtype=torch.float16, device="cuda:0"
+            kv_cache_shape, dtype=torch.bfloat16, device="cuda:0"
         )
 
         self.cache_v = torch.zeros(
-            kv_cache_shape, dtype=torch.float16, device="cuda:0"
+            kv_cache_shape, dtype=torch.bfloat16, device="cuda:0"
         )

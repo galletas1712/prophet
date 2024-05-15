@@ -59,11 +59,12 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
 
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-    ndim = x.ndim
-    assert 0 <= 1 < ndim
-    assert freqs_cis.shape == (x.shape[1], x.shape[-1])
-    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
-    return freqs_cis.view(*shape)
+    # ndim = x.ndim
+    # assert 0 <= 1 < ndim
+    # assert freqs_cis.shape == (x.shape[1], x.shape[-1])
+    # shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+    # return freqs_cis.view(*shape)
+    return freqs_cis.unsqueeze(2)
 
 
 def apply_rotary_emb(
@@ -73,7 +74,9 @@ def apply_rotary_emb(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
+
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq), xk_out.type_as(xk)
@@ -140,6 +143,7 @@ class Attention(nn.Module):
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
         mask: Optional[torch.Tensor],
+        layer_idx: int,
     ):
         bsz, seqlen, _ = x.shape
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
@@ -152,39 +156,62 @@ class Attention(nn.Module):
 
         # cache_k = cache_k.to(xq) # TODO: CHECK moving gpus???
         # cache_v = cache_v.to(xq)
-        cache_k[:bsz, start_pos : start_pos + seqlen] = xk
-        cache_v[:bsz, start_pos : start_pos + seqlen] = xv
 
-        keys = cache_k[:bsz, : start_pos + seqlen]
-        values = cache_v[:bsz, : start_pos + seqlen]
+        # TODO: Vectorized implementation.
+        for sample_idx in range(bsz):
+            curr_start_pos = start_pos[sample_idx]
 
-        # repeat k/v heads if n_kv_heads < n_heads
-        keys = repeat_kv(
-            keys, self.n_rep
-        )  # (bs, cache_len + seqlen, n_local_heads, head_dim)
-        values = repeat_kv(
-            values, self.n_rep
-        )  # (bs, cache_len + seqlen, n_local_heads, head_dim)
+            cache_k[
+                sample_idx,
+                curr_start_pos : curr_start_pos + seqlen,
+                layer_idx,
+                :,
+            ] = torch.repeat_interleave(
+                xk[sample_idx].view(seqlen, -1), dim=1, repeats=self.n_rep
+            )
+
+            # torch.repeat_interleave(xk[sample_idx].view(seqlen, -1), dim=1, repeats=n_rep)
+
+            cache_v[
+                sample_idx,
+                curr_start_pos : curr_start_pos + seqlen,
+                layer_idx,
+                :,
+            ] = torch.repeat_interleave(
+                xv[sample_idx].view(seqlen, -1), dim=1, repeats=self.n_rep
+            )
+
+        # Invalid indices will be ignored due to mask.
+        keys = cache_k[:, :, layer_idx, :].view(
+            bsz, -1, self.n_local_heads, self.head_dim
+        )
+        values = cache_v[:, :, layer_idx, :].view(
+            bsz, -1, self.n_local_heads, self.head_dim
+        )
 
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         keys = keys.transpose(
             1, 2
-        )  # (bs, n_local_heads, cache_len + seqlen, head_dim)
+        )  # (bs, n_local_heads, max_seq_len, head_dim)
         values = values.transpose(
             1, 2
-        )  # (bs, n_local_heads, cache_len + seqlen, head_dim)
+        )  # (bs, n_local_heads, max_seq_len, head_dim)
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(
             self.head_dim
         )
+
         if mask is not None:
             scores = (
                 scores + mask
             )  # (bs, n_local_heads, seqlen, cache_len + seqlen)
+
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+
         output = torch.matmul(
             scores, values
         )  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
+
         return self.wo(output)
 
 
@@ -264,6 +291,7 @@ class TransformerBlock(nn.Module):
             cache_k,
             cache_v,
             mask,
+            self.layer_id,
         )
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
@@ -298,36 +326,31 @@ class Transformer(nn.Module):
         self.kv_cache_shape = (params.max_seq_len, params.n_layers, params.dim)
 
     # Mask returned will be added to attention scores of shape
-    # (bs, n_local_heads, seqlen, cache_len + seqlen).
+    # (bs, n_local_heads, seqlen, max_seq_len).
+    @torch.inference_mode()
     def build_attention_mask(
         self, prompt_len, cache_len, start_pos, first_pad_idx
     ):
         batch_size = start_pos.shape[0]
 
-        pad_val = float("-inf")
-
-        # Build the mask over input tokens.
-        prompt_mask = torch.full(
-            (prompt_len, prompt_len), pad_val, device="cuda:0"
-        )
-        prompt_mask = torch.triu(prompt_mask, diagonal=1)
-
-        prompt_mask = torch.stack([prompt_mask for _ in range(batch_size)])
-        prompt_mask[torch.arange(batch_size), start_pos:] = pad_val
-        prompt_mask = prompt_mask.unsqueeze(1)
-
-        # Build the mask over KV caches. Necessary because KV caches are padded
-        # to max_seq_len.
-        kv_cache_mask = torch.zeros(
-            (batch_size, 1, prompt_len, cache_len),
+        mask = torch.zeros(
+            batch_size,
+            1,
+            prompt_len,
+            self.params.max_seq_len,
             device="cuda:0",
-            dtype=torch.float16,
         )
 
-        kv_cache_mask[torch.arange(batch_size), :, :, start_pos:] = pad_val
-
-        # Concatenate input and KV cache mask.
-        mask = torch.concat([kv_cache_mask, prompt_mask], dim=3)
+        # Add mask for input tokens. TODO: Vectorized implementation.
+        for sample_idx in range(batch_size):
+            curr_pad_idx = first_pad_idx[sample_idx]
+            for input_seq_idx in range(prompt_len):
+                mask[
+                    sample_idx,
+                    :,
+                    input_seq_idx,
+                    min(input_seq_idx + 1, curr_pad_idx),
+                ] = float("-inf")
 
         return mask
 
@@ -340,25 +363,29 @@ class Transformer(nn.Module):
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
     ):
-        _, seqlen = tokens.shape
+        batch_size, seqlen = tokens.shape
 
         h = self.tok_embeddings(tokens)
         self.freqs_cis = self.freqs_cis.to(h.device)
-        freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
+
+        # NOTE: scheduled requests might have different numbers of tokens
+        # already outputted, so we need a different start_pos for each.
+
+        # TODO: Vectorized implementation.
+        freqs_cis = []
+        for sample_idx in range(batch_size):
+            curr_start_pos = start_pos[sample_idx]
+            freqs_cis.append(
+                self.freqs_cis[curr_start_pos : curr_start_pos + seqlen]
+            )
+        freqs_cis = torch.stack(freqs_cis)
 
         mask = self.build_attention_mask(
             tokens.shape[1], cache_k.shape[1], start_pos, first_pad_idx
         )
 
         for layer_id, layer in enumerate(self.layers):
-            h = layer(
-                h,
-                start_pos,
-                freqs_cis,
-                cache_k[:, layer_id, :, :],
-                cache_v[:, layer_id, :, :],
-                mask,
-            )
+            h = layer(h, start_pos, freqs_cis, cache_k, cache_v, mask)
         h = self.norm(h)
         output = self.output(h).float()
         return output
