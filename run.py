@@ -6,7 +6,7 @@ from entrypoints import LLM
     config_path="config/", config_name="dummy_test", version_base=None
 )
 def run_model(config):
-    llm = LLM(config.scheduler, config.model)
+    llm = LLM(config.model, config.scheduler)
 
     prompts = [
         "test prompt 1",
@@ -24,7 +24,7 @@ def run_model(config):
     while len(outputs) < len(prompts):
         llm.step()
         for completed_request_ids in llm.curr_step_completed_request_ids:
-            outputs.append(requests[completed_request_ids].output)
+            outputs.append(requests[completed_request_ids].output_str)
 
     print(f"Received outputs:")
     print(outputs)

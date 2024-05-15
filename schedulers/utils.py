@@ -13,5 +13,5 @@ def register_scheduler(name):
     return register_curr_scheduler
 
 
-def build_scheduler(scheduler_config):
-    return SCHEDULERS[scheduler_config.name](**scheduler_config)
+def build_scheduler(scheduler_config, **kwargs):
+    return SCHEDULERS[scheduler_config.name](**scheduler_config, **kwargs)

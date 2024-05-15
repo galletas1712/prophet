@@ -7,3 +7,10 @@ max_seq_len: 512
 max_batch_size: 4
 model_parallel_size: 1
 seed: 0
+
+global_generation_params:
+  max_gen_len: 64
+  temperature: 0.6
+  top_p: 0.9
+  logprobs: False
+  echo: False

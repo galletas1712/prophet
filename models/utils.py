@@ -32,13 +32,18 @@ def build_dummy(model_config):
 
 @register_model("llama_3")
 def build_llama_3(model_config):
-    from models.llama3 import Llama
+    from models.llama3 import Llama, GlobalGenerationParams
+
+    glob_params = GlobalGenerationParams(
+        **model_config.global_generation_params
+    )
 
     return Llama.build(
         ckpt_dir=model_config.ckpt_dir,
         tokenizer_path=model_config.tokenizer_path,
         max_seq_len=model_config.max_seq_len,
         max_batch_size=model_config.max_batch_size,
+        glob_params=glob_params,
     )
 
 

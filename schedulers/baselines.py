@@ -8,8 +8,10 @@ from schedulers.utils import register_scheduler
 @register_scheduler("fcfs")
 class FCFS_Scheduler:
 
-    def __init__(self, batch_size, **kwargs):
+    def __init__(self, batch_size, kv_cache_shape, **kwargs):
         super(FCFS_Scheduler, self).__init__()
+
+        self.kv_cache_shape = kv_cache_shape
         self.batch_size = batch_size
 
         self.request_dict = OrderedDict()
@@ -19,7 +21,7 @@ class FCFS_Scheduler:
         request_id = self.next_id
         self.next_id += 1
 
-        request = Request(request_id, prompt)
+        request = Request(request_id, prompt, self.kv_cache_shape)
         self.request_dict[request_id] = request
 
         return request
@@ -35,6 +37,6 @@ class FCFS_Scheduler:
                 break
 
         return batch
-    
+
     def remove_request(self, finished_request_id):
         self.request_dict.pop(finished_request_id)

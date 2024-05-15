@@ -62,8 +62,7 @@ def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
     ndim = x.ndim
     assert 0 <= 1 < ndim
     assert freqs_cis.shape == (x.shape[1], x.shape[-1])
-    shape = [d if i == 1 or i == ndim -
-             1 else 1 for i, d in enumerate(x.shape)]
+    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
     return freqs_cis.view(*shape)
 
 
@@ -153,8 +152,8 @@ class Attention(nn.Module):
 
         # cache_k = cache_k.to(xq) # TODO: CHECK moving gpus???
         # cache_v = cache_v.to(xq)
-        cache_k[:bsz, start_pos: start_pos + seqlen] = xk
-        cache_v[:bsz, start_pos: start_pos + seqlen] = xv
+        cache_k[:bsz, start_pos : start_pos + seqlen] = xk
+        cache_v[:bsz, start_pos : start_pos + seqlen] = xv
 
         keys = cache_k[:bsz, : start_pos + seqlen]
         values = cache_v[:bsz, : start_pos + seqlen]
@@ -187,6 +186,7 @@ class Attention(nn.Module):
         )  # (bs, n_local_heads, seqlen, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
         return self.wo(output)
+
 
 class FeedForward(nn.Module):
     def __init__(
@@ -258,10 +258,16 @@ class TransformerBlock(nn.Module):
         mask: Optional[torch.Tensor],
     ):
         h = x + self.attention(
-            self.attention_norm(x), start_pos, freqs_cis, cache_k, cache_v, mask,
+            self.attention_norm(x),
+            start_pos,
+            freqs_cis,
+            cache_k,
+            cache_v,
+            mask,
         )
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
+
 
 class Transformer(nn.Module):
     def __init__(self, params: ModelArgs):
@@ -289,31 +295,70 @@ class Transformer(nn.Module):
             params.rope_theta,
         )
 
+        self.kv_cache_shape = (params.max_seq_len, params.n_layers, params.dim)
+
+    # Mask returned will be added to attention scores of shape
+    # (bs, n_local_heads, seqlen, cache_len + seqlen).
+    def build_attention_mask(
+        self, prompt_len, cache_len, start_pos, first_pad_idx
+    ):
+        batch_size = start_pos.shape[0]
+
+        pad_val = float("-inf")
+
+        # Build the mask over input tokens.
+        prompt_mask = torch.full(
+            (prompt_len, prompt_len), pad_val, device="cuda:0"
+        )
+        prompt_mask = torch.triu(prompt_mask, diagonal=1)
+
+        prompt_mask = torch.stack([prompt_mask for _ in range(batch_size)])
+        prompt_mask[torch.arange(batch_size), start_pos:] = pad_val
+        prompt_mask = prompt_mask.unsqueeze(1)
+
+        # Build the mask over KV caches. Necessary because KV caches are padded
+        # to max_seq_len.
+        kv_cache_mask = torch.zeros(
+            (batch_size, 1, prompt_len, cache_len),
+            device="cuda:0",
+            dtype=torch.float16,
+        )
+
+        kv_cache_mask[torch.arange(batch_size), :, :, start_pos:] = pad_val
+
+        # Concatenate input and KV cache mask.
+        mask = torch.concat([kv_cache_mask, prompt_mask], dim=3)
+
+        return mask
+
     @torch.inference_mode()
-    def forward(self, tokens: torch.Tensor, start_pos: int, cache_k: torch.Tensor, cache_v: torch.Tensor):
-        _bsz, seqlen = tokens.shape
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        first_pad_idx: torch.Tensor,
+        start_pos: torch.Tensor,
+        cache_k: torch.Tensor,
+        cache_v: torch.Tensor,
+    ):
+        _, seqlen = tokens.shape
+
         h = self.tok_embeddings(tokens)
         self.freqs_cis = self.freqs_cis.to(h.device)
-        freqs_cis = self.freqs_cis[start_pos: start_pos + seqlen]
+        freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
 
-        mask = None
-        if seqlen > 1:
-            mask = torch.full(
-                (seqlen, seqlen), float("-inf"), device=tokens.device
-            )
-
-            mask = torch.triu(mask, diagonal=1)
-
-            # When performing key-value caching, we compute the attention scores
-            # only for the new sequence. Thus, the matrix of scores is of size
-            # (seqlen, cache_len + seqlen), and the only masked entries are (i, j) for
-            # j > cache_len + i, since row i corresponds to token cache_len + i.
-            mask = torch.hstack(
-                [torch.zeros((seqlen, start_pos), device=tokens.device), mask]
-            ).type_as(h)
+        mask = self.build_attention_mask(
+            tokens.shape[1], cache_k.shape[1], start_pos, first_pad_idx
+        )
 
         for layer_id, layer in enumerate(self.layers):
-            h = layer(h, start_pos, freqs_cis, cache_k[:, :, layer_id], cache_v[:, :, layer_id], mask)
+            h = layer(
+                h,
+                start_pos,
+                freqs_cis,
+                cache_k[:, layer_id, :, :],
+                cache_v[:, layer_id, :, :],
+                mask,
+            )
         h = self.norm(h)
         output = self.output(h).float()
         return output
