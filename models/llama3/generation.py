@@ -102,31 +102,12 @@ class DataBatch:
         self.cache_k = torch.stack([request.cache_k for request in requests])
         self.cache_v = torch.stack([request.cache_v for request in requests])
 
+        self.first_pad_idx = torch.zeros(
+            (len(requests),), dtype=torch.long, device="cuda:0")
+
         # Build the input tokens tensor, consisting of tokens that haven't been
         # processed yet. If prefill, this is all input tokens. If decode, this
         # is the last outputted decode token.
-        self.build_input_tokens_tensor(requests, pad_token)
-
-        # Set the start pos.
-        batch_size = len(requests)
-        if self.stage == BatchStage.PREFILL:
-            self.start_pos = torch.zeros(
-                (batch_size,), dtype=torch.long, device="cuda:0"
-            )
-        if self.stage == BatchStage.DECODE:
-            self.start_pos = torch.tensor(
-                [len(request.output_tokens) for request in requests],
-                dtype=torch.long,
-                device="cuda:0",
-            )
-
-        # EOS reached is default false when constructing the batch since a
-        # request is assumed to be never scheduled if EOS already reached.
-        self.eos_reached = torch.zeros((batch_size,), dtype=torch.bool)
-
-    def build_input_tokens_tensor(
-        self, requests: List[Request], pad_token: int
-    ):
         input_tokens = []
         max_input_tokens_len = 0
 
@@ -135,9 +116,9 @@ class DataBatch:
                 max_input_tokens_len, len(request.prompt_tokens)
             )
 
-            if self.stage == BatchStage.PREFILL:
+            if self.stage is BatchStage.PREFILL:
                 input_tokens.append(request.prompt_tokens)
-            elif self.stage == BatchStage.DECODE:
+            elif self.stage is BatchStage.DECODE:
                 input_tokens.append([request.output_tokens[-1]])
 
         batch_size = len(requests)
@@ -149,17 +130,31 @@ class DataBatch:
             device="cuda:0",
         )
 
-        pad_idxs = []
-
         for input_idx, token_seq in enumerate(input_tokens):
             self.input_tokens[input_idx, : len(token_seq)] = torch.tensor(
                 token_seq, dtype=torch.long, device="cuda:0"
             )
-            pad_idxs.append(len(token_seq))
+            self.first_pad_idx[input_idx] += len(token_seq)
 
-        self.first_pad_idx = torch.tensor(
-            pad_idxs, dtype=torch.long, device="cuda:0"
-        )
+        # Set the start pos.
+        batch_size = len(requests)
+        if self.stage is BatchStage.PREFILL:
+            self.start_pos = torch.zeros(
+                (batch_size,), dtype=torch.long, device="cuda:0"
+            )
+        elif self.stage is BatchStage.DECODE:
+            self.start_pos = torch.tensor(
+                [len(request.prompt_tokens) + len(request.output_tokens) - 1
+                 for request in requests],
+                dtype=torch.long,
+                device="cuda:0",
+            )
+
+        self.first_pad_idx += self.start_pos
+
+        # EOS reached is default false when constructing the batch since a
+        # request is assumed to be never scheduled if EOS already reached.
+        self.eos_reached = torch.zeros((batch_size,), dtype=torch.bool)
 
 
 class Llama:
@@ -283,16 +278,16 @@ class Llama:
         decode_requests = []
 
         for request in requests:
-            if request.stage == RequestStage.PREFILL:
+            if request.stage is RequestStage.PREFILL:
                 prefill_requests.append(request)
-            elif request.stage == RequestStage.DECODE:
+            elif request.stage is RequestStage.DECODE:
                 decode_requests.append(request)
 
         if len(prefill_requests) > 0:
             self.step_prefill(prefill_requests)
 
         if len(decode_requests) > 0:
-            self.step_prefill(decode_requests)
+            self.step_decode(decode_requests)
 
     @torch.inference_mode()
     def step_prefill(self, requests: List[Request]):
@@ -317,7 +312,7 @@ class Llama:
         )
 
         self.sample_and_add_token(
-            requests, logits, prefill_batch.first_pad_idx)
+            requests, logits, prefill_batch.first_pad_idx, prefill_batch.start_pos)
         self.update_kv_cache(requests, prefill_batch)
 
     @torch.inference_mode()
@@ -336,17 +331,19 @@ class Llama:
             decode_batch.cache_v,
         )
 
-        self.sample_and_add_token(requests, logits, decode_batch.first_pad_idx)
+        self.sample_and_add_token(
+            requests, logits, decode_batch.first_pad_idx, decode_batch.start_pos)
         self.update_kv_cache(requests, decode_batch)
 
+    @torch.inference_mode()
     def sample_and_add_token(
-        self, requests: List[Request], logits: torch.Tensor, first_pad_idx: torch.Tensor
+        self, requests: List[Request], logits: torch.Tensor, first_pad_idx: torch.Tensor, start_pos: torch.Tensor
     ):
         # Sample the next token. TODO: check how this would work for scatter.
         # NOTE: logits = (bsz, max_input_tokens_len, encoding_universe_size)
-        print(logits.shape)
-        logits = logits[torch.arange(len(requests)), first_pad_idx, :]
-        print(logits.shape)
+        assert torch.all(first_pad_idx > 0).item()
+        logits = logits[torch.arange(
+            len(requests)), first_pad_idx - start_pos - 1, :]
         if self.glob_params.temperature > 0:
             probs = torch.softmax(
                 logits / self.glob_params.temperature, dim=-1
@@ -383,6 +380,7 @@ class Llama:
             request.cache_v = batch.cache_v[request_idx, ...]
 
 
+@torch.inference_mode()
 def sample_top_p(probs, p):
     """
     Perform top-p (nucleus) sampling on a probability distribution.

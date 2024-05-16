@@ -25,6 +25,6 @@ class LLM:
         self.model.step(batch)
 
         for _, request in enumerate(batch):
-            if request.stage == RequestStage.DONE:
+            if request.stage is RequestStage.DONE:
                 self.curr_step_completed_request_ids.append(request.request_id)
                 self.scheduler.remove_request(request.request_id)

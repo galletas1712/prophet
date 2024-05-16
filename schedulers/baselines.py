@@ -31,7 +31,7 @@ class FCFS_Scheduler:
         batch = []
 
         for request_id, request in self.request_dict.items():
-            assert request.stage != RequestStage.DONE
+            assert request.stage is not RequestStage.DONE
             batch.append(request)
             if len(batch) == self.batch_size:
                 break

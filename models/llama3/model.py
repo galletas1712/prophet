@@ -205,7 +205,7 @@ class Attention(nn.Module):
                 scores + mask
             )  # (bs, n_local_heads, seqlen, cache_len + seqlen)
 
-        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+        scores = F.softmax(scores.float(), dim=-1).type_as(xq).nan_to_num()
 
         output = torch.matmul(
             scores, values
@@ -331,7 +331,6 @@ class Transformer(nn.Module):
     def build_attention_mask(
         self, prompt_len, cache_len, start_pos, first_pad_idx
     ):
-        # print(prompt_len, cache_len, start_pos, first_pad_idx)
         batch_size = start_pos.shape[0]
 
         mask = torch.zeros(
@@ -351,7 +350,6 @@ class Transformer(nn.Module):
             mask[b, :, start_pos[b]:first_pad_idx[b],
                  first_pad_idx[b]:] = float("-inf")
             mask[b, :, first_pad_idx[b]:, :] = float("-inf")
-            # print(mask[b, :])
 
         return mask
 
