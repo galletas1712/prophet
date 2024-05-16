@@ -163,7 +163,7 @@ class Attention(nn.Module):
 
             cache_k[
                 sample_idx,
-                curr_start_pos : curr_start_pos + seqlen,
+                curr_start_pos: curr_start_pos + seqlen,
                 layer_idx,
                 :,
             ] = torch.repeat_interleave(
@@ -174,7 +174,7 @@ class Attention(nn.Module):
 
             cache_v[
                 sample_idx,
-                curr_start_pos : curr_start_pos + seqlen,
+                curr_start_pos: curr_start_pos + seqlen,
                 layer_idx,
                 :,
             ] = torch.repeat_interleave(
@@ -331,6 +331,7 @@ class Transformer(nn.Module):
     def build_attention_mask(
         self, prompt_len, cache_len, start_pos, first_pad_idx
     ):
+        # print(prompt_len, cache_len, start_pos, first_pad_idx)
         batch_size = start_pos.shape[0]
 
         mask = torch.zeros(
@@ -342,15 +343,15 @@ class Transformer(nn.Module):
         )
 
         # Add mask for input tokens. TODO: Vectorized implementation.
-        for sample_idx in range(batch_size):
-            curr_pad_idx = first_pad_idx[sample_idx]
-            for input_seq_idx in range(prompt_len):
-                mask[
-                    sample_idx,
-                    :,
-                    input_seq_idx,
-                    min(input_seq_idx + 1, curr_pad_idx),
-                ] = float("-inf")
+        for b in range(batch_size):
+            sample_len = first_pad_idx[b] - start_pos[b]
+            mask[b, :, start_pos[b]:first_pad_idx[b], start_pos[b]:first_pad_idx[b]] = torch.triu(
+                torch.full((sample_len, sample_len), float("-inf")), diagonal=1
+            )
+            mask[b, :, start_pos[b]:first_pad_idx[b],
+                 first_pad_idx[b]:] = float("-inf")
+            mask[b, :, first_pad_idx[b]:, :] = float("-inf")
+            # print(mask[b, :])
 
         return mask
 
@@ -358,8 +359,8 @@ class Transformer(nn.Module):
     def forward(
         self,
         tokens: torch.Tensor,
-        first_pad_idx: torch.Tensor,
         start_pos: torch.Tensor,
+        first_pad_idx: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
     ):
@@ -376,10 +377,11 @@ class Transformer(nn.Module):
         for sample_idx in range(batch_size):
             curr_start_pos = start_pos[sample_idx]
             freqs_cis.append(
-                self.freqs_cis[curr_start_pos : curr_start_pos + seqlen]
+                self.freqs_cis[curr_start_pos: curr_start_pos + seqlen]
             )
         freqs_cis = torch.stack(freqs_cis)
 
+        # NOTE: tokens.shape[1] is the maximum token length in current batch (decode = 1)
         mask = self.build_attention_mask(
             tokens.shape[1], cache_k.shape[1], start_pos, first_pad_idx
         )

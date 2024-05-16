@@ -316,7 +316,8 @@ class Llama:
             prefill_batch.cache_v,
         )
 
-        self.sample_and_add_token(requests, logits)
+        self.sample_and_add_token(
+            requests, logits, prefill_batch.first_pad_idx)
         self.update_kv_cache(requests, prefill_batch)
 
     @torch.inference_mode()
@@ -335,20 +336,24 @@ class Llama:
             decode_batch.cache_v,
         )
 
-        self.sample_and_add_token(requests, logits)
+        self.sample_and_add_token(requests, logits, decode_batch.first_pad_idx)
         self.update_kv_cache(requests, decode_batch)
 
     def sample_and_add_token(
-        self, requests: List[Request], logits: torch.Tensor
+        self, requests: List[Request], logits: torch.Tensor, first_pad_idx: torch.Tensor
     ):
         # Sample the next token. TODO: check how this would work for scatter.
+        # NOTE: logits = (bsz, max_input_tokens_len, encoding_universe_size)
+        print(logits.shape)
+        logits = logits[torch.arange(len(requests)), first_pad_idx, :]
+        print(logits.shape)
         if self.glob_params.temperature > 0:
             probs = torch.softmax(
-                logits[:, -1] / self.glob_params.temperature, dim=-1
+                logits / self.glob_params.temperature, dim=-1
             )
             next_token = sample_top_p(probs, self.glob_params.top_p)
         else:
-            next_token = torch.argmax(logits[:, -1], dim=-1)
+            next_token = torch.argmax(logits, dim=-1)
 
         next_token = next_token.reshape(-1).cpu().numpy()
 
