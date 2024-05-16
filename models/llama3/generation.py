@@ -103,7 +103,7 @@ class DataBatch:
         self.cache_v = torch.stack([request.cache_v for request in requests])
 
         self.first_pad_idx = torch.zeros(
-            (len(requests),), dtype=torch.long, device="cuda:0"
+            (len(requests),), dtype=torch.long, device="cuda"
         )
 
         # Build the input tokens tensor, consisting of tokens that haven't been
@@ -128,12 +128,12 @@ class DataBatch:
             (batch_size, max_input_tokens_len),
             pad_token,
             dtype=torch.long,
-            device="cuda:0",
+            device="cuda",
         )
 
         for input_idx, token_seq in enumerate(input_tokens):
             self.input_tokens[input_idx, : len(token_seq)] = torch.tensor(
-                token_seq, dtype=torch.long, device="cuda:0"
+                token_seq, dtype=torch.long, device="cuda"
             )
             self.first_pad_idx[input_idx] = len(token_seq)
 
@@ -141,7 +141,7 @@ class DataBatch:
         batch_size = len(requests)
         if self.stage is BatchStage.PREFILL:
             self.start_pos = torch.zeros(
-                (batch_size,), dtype=torch.long, device="cuda:0"
+                (batch_size,), dtype=torch.long, device="cuda"
             )
         elif self.stage is BatchStage.DECODE:
             self.start_pos = torch.tensor(
@@ -150,7 +150,7 @@ class DataBatch:
                     for request in requests
                 ],
                 dtype=torch.long,
-                device="cuda:0",
+                device="cuda",
             )
 
         # EOS reached is default false when constructing the batch since a
@@ -356,7 +356,8 @@ class Llama:
         logits = logits[torch.arange(len(requests)), first_pad_idx - 1, :]
 
         if self.glob_params.temperature > 0:
-            probs = torch.softmax(logits / self.glob_params.temperature, dim=-1)
+            probs = torch.softmax(
+                logits / self.glob_params.temperature, dim=-1)
             next_token = sample_top_p(probs, self.glob_params.top_p)
         else:
             next_token = torch.argmax(logits, dim=-1)

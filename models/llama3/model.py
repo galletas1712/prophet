@@ -163,14 +163,14 @@ class Attention(nn.Module):
 
             cache_k[
                 sample_idx,
-                curr_start_pos : curr_start_pos + seqlen,
+                curr_start_pos: curr_start_pos + seqlen,
                 layer_idx,
                 :,
             ] = xk[sample_idx].view(seqlen, -1)
 
             cache_v[
                 sample_idx,
-                curr_start_pos : curr_start_pos + seqlen,
+                curr_start_pos: curr_start_pos + seqlen,
                 layer_idx,
                 :,
             ] = xv[sample_idx].view(seqlen, -1)
@@ -332,7 +332,7 @@ class Transformer(nn.Module):
             1,
             prompt_len,
             self.params.max_seq_len,
-            device="cuda:0",
+            device="cuda",
         )
 
         # Add mask for input tokens. TODO: Vectorized implementation.
@@ -344,7 +344,7 @@ class Transformer(nn.Module):
                     sample_idx,
                     :,
                     input_seq_idx,
-                    curr_start_pos + min(input_seq_idx + 1, curr_pad_idx) :,
+                    curr_start_pos + min(input_seq_idx + 1, curr_pad_idx):,
                 ] = float("-inf")
 
         return mask
@@ -371,7 +371,7 @@ class Transformer(nn.Module):
         for sample_idx in range(batch_size):
             curr_start_pos = start_pos[sample_idx]
             freqs_cis.append(
-                self.freqs_cis[curr_start_pos : curr_start_pos + seqlen]
+                self.freqs_cis[curr_start_pos: curr_start_pos + seqlen]
             )
 
         freqs_cis = torch.stack(freqs_cis)
