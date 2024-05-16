@@ -72,11 +72,11 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+
     xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
     xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
 
     freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-
     xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
     xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
     return xq_out.type_as(xq), xk_out.type_as(xk)
@@ -138,7 +138,7 @@ class Attention(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        start_pos: int,
+        start_pos: torch.Tensor,
         freqs_cis: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
@@ -154,8 +154,8 @@ class Attention(nn.Module):
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
-        # cache_k = cache_k.to(xq) # TODO: CHECK moving gpus???
-        # cache_v = cache_v.to(xq)
+        xk = repeat_kv(xk, self.n_rep)
+        xv = repeat_kv(xv, self.n_rep)
 
         # TODO: Vectorized implementation.
         for sample_idx in range(bsz):
@@ -163,23 +163,17 @@ class Attention(nn.Module):
 
             cache_k[
                 sample_idx,
-                curr_start_pos: curr_start_pos + seqlen,
+                curr_start_pos : curr_start_pos + seqlen,
                 layer_idx,
                 :,
-            ] = torch.repeat_interleave(
-                xk[sample_idx].view(seqlen, -1), dim=1, repeats=self.n_rep
-            )
-
-            # torch.repeat_interleave(xk[sample_idx].view(seqlen, -1), dim=1, repeats=n_rep)
+            ] = xk[sample_idx].view(seqlen, -1)
 
             cache_v[
                 sample_idx,
-                curr_start_pos: curr_start_pos + seqlen,
+                curr_start_pos : curr_start_pos + seqlen,
                 layer_idx,
                 :,
-            ] = torch.repeat_interleave(
-                xv[sample_idx].view(seqlen, -1), dim=1, repeats=self.n_rep
-            )
+            ] = xv[sample_idx].view(seqlen, -1)
 
         # Invalid indices will be ignored due to mask.
         keys = cache_k[:, :, layer_idx, :].view(
@@ -278,7 +272,7 @@ class TransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        start_pos: int,
+        start_pos: torch.Tensor,
         freqs_cis: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
@@ -342,14 +336,16 @@ class Transformer(nn.Module):
         )
 
         # Add mask for input tokens. TODO: Vectorized implementation.
-        for b in range(batch_size):
-            sample_len = first_pad_idx[b] - start_pos[b]
-            mask[b, :, start_pos[b]:first_pad_idx[b], start_pos[b]:first_pad_idx[b]] = torch.triu(
-                torch.full((sample_len, sample_len), float("-inf")), diagonal=1
-            )
-            mask[b, :, start_pos[b]:first_pad_idx[b],
-                 first_pad_idx[b]:] = float("-inf")
-            mask[b, :, first_pad_idx[b]:, :] = float("-inf")
+        for sample_idx in range(batch_size):
+            curr_pad_idx = first_pad_idx[sample_idx]
+            curr_start_pos = start_pos[sample_idx]
+            for input_seq_idx in range(prompt_len):
+                mask[
+                    sample_idx,
+                    :,
+                    input_seq_idx,
+                    curr_start_pos + min(input_seq_idx + 1, curr_pad_idx) :,
+                ] = float("-inf")
 
         return mask
 
@@ -375,8 +371,9 @@ class Transformer(nn.Module):
         for sample_idx in range(batch_size):
             curr_start_pos = start_pos[sample_idx]
             freqs_cis.append(
-                self.freqs_cis[curr_start_pos: curr_start_pos + seqlen]
+                self.freqs_cis[curr_start_pos : curr_start_pos + seqlen]
             )
+
         freqs_cis = torch.stack(freqs_cis)
 
         # NOTE: tokens.shape[1] is the maximum token length in current batch (decode = 1)

@@ -103,7 +103,8 @@ class DataBatch:
         self.cache_v = torch.stack([request.cache_v for request in requests])
 
         self.first_pad_idx = torch.zeros(
-            (len(requests),), dtype=torch.long, device="cuda:0")
+            (len(requests),), dtype=torch.long, device="cuda:0"
+        )
 
         # Build the input tokens tensor, consisting of tokens that haven't been
         # processed yet. If prefill, this is all input tokens. If decode, this
@@ -112,14 +113,14 @@ class DataBatch:
         max_input_tokens_len = 0
 
         for request in requests:
-            max_input_tokens_len = max(
-                max_input_tokens_len, len(request.prompt_tokens)
-            )
-
             if self.stage is BatchStage.PREFILL:
                 input_tokens.append(request.prompt_tokens)
             elif self.stage is BatchStage.DECODE:
                 input_tokens.append([request.output_tokens[-1]])
+
+            max_input_tokens_len = max(
+                max_input_tokens_len, len(input_tokens[-1])
+            )
 
         batch_size = len(requests)
 
@@ -134,7 +135,7 @@ class DataBatch:
             self.input_tokens[input_idx, : len(token_seq)] = torch.tensor(
                 token_seq, dtype=torch.long, device="cuda:0"
             )
-            self.first_pad_idx[input_idx] += len(token_seq)
+            self.first_pad_idx[input_idx] = len(token_seq)
 
         # Set the start pos.
         batch_size = len(requests)
@@ -144,13 +145,13 @@ class DataBatch:
             )
         elif self.stage is BatchStage.DECODE:
             self.start_pos = torch.tensor(
-                [len(request.prompt_tokens) + len(request.output_tokens) - 1
-                 for request in requests],
+                [
+                    len(request.prompt_tokens) + len(request.output_tokens) - 1
+                    for request in requests
+                ],
                 dtype=torch.long,
                 device="cuda:0",
             )
-
-        self.first_pad_idx += self.start_pos
 
         # EOS reached is default false when constructing the batch since a
         # request is assumed to be never scheduled if EOS already reached.
@@ -312,7 +313,11 @@ class Llama:
         )
 
         self.sample_and_add_token(
-            requests, logits, prefill_batch.first_pad_idx, prefill_batch.start_pos)
+            requests,
+            logits,
+            prefill_batch.first_pad_idx,
+            prefill_batch.start_pos,
+        )
         self.update_kv_cache(requests, prefill_batch)
 
     @torch.inference_mode()
@@ -332,22 +337,26 @@ class Llama:
         )
 
         self.sample_and_add_token(
-            requests, logits, decode_batch.first_pad_idx, decode_batch.start_pos)
+            requests, logits, decode_batch.first_pad_idx, decode_batch.start_pos
+        )
         self.update_kv_cache(requests, decode_batch)
 
     @torch.inference_mode()
     def sample_and_add_token(
-        self, requests: List[Request], logits: torch.Tensor, first_pad_idx: torch.Tensor, start_pos: torch.Tensor
+        self,
+        requests: List[Request],
+        logits: torch.Tensor,
+        first_pad_idx: torch.Tensor,
+        start_pos: torch.Tensor,
     ):
         # Sample the next token. TODO: check how this would work for scatter.
         # NOTE: logits = (bsz, max_input_tokens_len, encoding_universe_size)
         assert torch.all(first_pad_idx > 0).item()
-        logits = logits[torch.arange(
-            len(requests)), first_pad_idx - start_pos - 1, :]
+
+        logits = logits[torch.arange(len(requests)), first_pad_idx - 1, :]
+
         if self.glob_params.temperature > 0:
-            probs = torch.softmax(
-                logits / self.glob_params.temperature, dim=-1
-            )
+            probs = torch.softmax(logits / self.glob_params.temperature, dim=-1)
             next_token = sample_top_p(probs, self.glob_params.top_p)
         else:
             next_token = torch.argmax(logits, dim=-1)
