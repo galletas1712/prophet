@@ -21,7 +21,7 @@ from fairscale.nn.model_parallel.initialize import (
     model_parallel_is_initialized,
 )
 
-from entrypoints.api import Request, RequestStage
+from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch
 from models.llama3.model import ModelArgs, Transformer
 from models.llama3.tokenizer import ChatFormat, Dialog, Message, Tokenizer
 
@@ -54,108 +54,6 @@ class ModelParams:
     n_layers: int
     n_local_kv_heads: int
     head_dim: int
-
-
-@dataclass
-class BatchStage(Enum):
-    PREFILL = 0
-    DECODE = 1
-
-
-@dataclass
-class DataBatch:
-    # Whether batch is prefill or infill.
-    stage: BatchStage
-
-    # Token ids of shape (batch_size, padded_seq_len). Only includes the new
-    # tokens the model needs to process; does not include tokens for which KV
-    # cache state is already known.
-    input_tokens: torch.Tensor
-
-    # Index of the first padding token in the input tokens for each sample in
-    # the batch. If no padding, it is the index right after the last index of
-    # the sample. Has shape (batch_size,).
-    first_pad_idx: torch.Tensor
-
-    # TODO: Log probs of the input_tokens and the output token. Has shape
-    # (batch_size, padded_seq_len + 1).
-    token_logprobs: Optional[torch.Tensor]
-
-    # KV cache of shape (batch_size, max_seq_len, n_layers, model_dim).
-    cache_k: torch.Tensor
-    cache_v: torch.Tensor
-
-    # Position in the corresponding sequences of each entry in input_tokens. Has
-    # shape (batch_size,).
-    start_pos: torch.Tensor
-
-    # Shape (batch_size,). True if EOS has been generated.
-    eos_reached: torch.Tensor
-
-    def __init__(
-        self, requests: List[Request], stage: BatchStage, pad_token: int
-    ):
-        self.stage = stage
-
-        # Batch the KV caches. Caches in request are already padded with shape
-        # (num_layers, max_seq_len, model_dim).
-        self.cache_k = torch.stack([request.cache_k for request in requests])
-        self.cache_v = torch.stack([request.cache_v for request in requests])
-
-        self.first_pad_idx = torch.zeros(
-            (len(requests),), dtype=torch.long, device="cuda"
-        )
-
-        # Build the input tokens tensor, consisting of tokens that haven't been
-        # processed yet. If prefill, this is all input tokens. If decode, this
-        # is the last outputted decode token.
-        input_tokens = []
-        max_input_tokens_len = 0
-
-        for request in requests:
-            if self.stage is BatchStage.PREFILL:
-                input_tokens.append(request.prompt_tokens)
-            elif self.stage is BatchStage.DECODE:
-                input_tokens.append([request.output_tokens[-1]])
-
-            max_input_tokens_len = max(
-                max_input_tokens_len, len(input_tokens[-1])
-            )
-
-        batch_size = len(requests)
-
-        self.input_tokens = torch.full(
-            (batch_size, max_input_tokens_len),
-            pad_token,
-            dtype=torch.long,
-            device="cuda",
-        )
-
-        for input_idx, token_seq in enumerate(input_tokens):
-            self.input_tokens[input_idx, : len(token_seq)] = torch.tensor(
-                token_seq, dtype=torch.long, device="cuda"
-            )
-            self.first_pad_idx[input_idx] = len(token_seq)
-
-        # Set the start pos.
-        batch_size = len(requests)
-        if self.stage is BatchStage.PREFILL:
-            self.start_pos = torch.zeros(
-                (batch_size,), dtype=torch.long, device="cuda"
-            )
-        elif self.stage is BatchStage.DECODE:
-            self.start_pos = torch.tensor(
-                [
-                    len(request.prompt_tokens) + len(request.output_tokens) - 1
-                    for request in requests
-                ],
-                dtype=torch.long,
-                device="cuda",
-            )
-
-        # EOS reached is default false when constructing the batch since a
-        # request is assumed to be never scheduled if EOS already reached.
-        self.eos_reached = torch.zeros((batch_size,), dtype=torch.bool)
 
 
 class Llama:
@@ -249,19 +147,21 @@ class Llama:
             head_dim,
         )
 
-        return Llama(model, tokenizer, model_params, glob_params)
+        return Llama(model, tokenizer, model_params, model_args, glob_params)
 
     def __init__(
         self,
         model: Transformer,
         tokenizer: Tokenizer,
-        model_params: ModelParams,
+        model_params: ModelParams,  # TODO: remove model_params
+        model_args: ModelArgs,
         glob_params: GlobalGenerationParams,
     ):
         self.model = model
         self.tokenizer = tokenizer
 
         self.model_params = model_params
+        self.model_args = model_args
 
         self.glob_params = glob_params
         if self.glob_params.max_gen_len is None:  # TODO: redo this!
@@ -270,37 +170,21 @@ class Llama:
         self.stop_tokens = torch.tensor(list(tokenizer.stop_tokens))
         self.formatter = ChatFormat(tokenizer)
 
-    def kv_cache_shape(self):
-        return self.model.kv_cache_shape
-
-    @torch.inference_mode()
-    def step(self, requests: List[Request]):
-        prefill_requests = []
-        decode_requests = []
-
-        for request in requests:
-            if request.stage is RequestStage.PREFILL:
-                prefill_requests.append(request)
-            elif request.stage is RequestStage.DECODE:
-                decode_requests.append(request)
-
-        if len(prefill_requests) > 0:
-            self.step_prefill(prefill_requests)
-
-        if len(decode_requests) > 0:
-            self.step_decode(decode_requests)
-
     @torch.inference_mode()
     def step_prefill(self, requests: List[Request]):
-        # Tokenize inputs.
+        # Tokenize inputs. # TODO: chat tokenizer as well
         for request in requests:
             request.prompt_tokens = self.tokenizer.encode(
                 request.prompt_str, bos=True, eos=False
             )
 
         # Form the batch.
-        prefill_batch = DataBatch(
-            requests, BatchStage.PREFILL, self.tokenizer.pad_id
+        prefill_batch = PrefillDataBatch(
+            requests,
+            self.model_args.max_seq_len,
+            self.model_args.n_layers,
+            self.model_args.dim,
+            self.tokenizer.pad_id
         )
 
         # Run through model, populating KV caches.
@@ -313,20 +197,14 @@ class Llama:
         )
 
         self.sample_and_add_token(
-            requests,
+            prefill_batch,
             logits,
-            prefill_batch.first_pad_idx,
-            prefill_batch.start_pos,
         )
-        self.update_kv_cache(requests, prefill_batch)
+
+        return prefill_batch
 
     @torch.inference_mode()
-    def step_decode(self, requests: List[Request]):
-        # Form the batch.
-        decode_batch = DataBatch(
-            requests, BatchStage.DECODE, self.tokenizer.pad_id
-        )
-
+    def step_decode(self, decode_batch: DecodeDataBatch):
         # Run through model, populating KV caches.
         logits = self.model.forward(
             decode_batch.input_tokens,
@@ -337,23 +215,22 @@ class Llama:
         )
 
         self.sample_and_add_token(
-            requests, logits, decode_batch.first_pad_idx, decode_batch.start_pos
+            decode_batch,
+            logits,
         )
-        self.update_kv_cache(requests, decode_batch)
 
     @torch.inference_mode()
     def sample_and_add_token(
         self,
-        requests: List[Request],
+        batch: PrefillDataBatch | DecodeDataBatch,
         logits: torch.Tensor,
-        first_pad_idx: torch.Tensor,
-        start_pos: torch.Tensor,
     ):
-        # Sample the next token. TODO: check how this would work for scatter.
+        # Sample the next token.
         # NOTE: logits = (bsz, max_input_tokens_len, encoding_universe_size)
-        assert torch.all(first_pad_idx > 0).item()
+        assert torch.all(batch.first_pad_idx > 0).item()
 
-        logits = logits[torch.arange(len(requests)), first_pad_idx - 1, :]
+        logits = logits[torch.arange(
+            len(batch.requests)), torch.clamp(batch.first_pad_idx - 1, 0), :]
 
         if self.glob_params.temperature > 0:
             probs = torch.softmax(
@@ -365,9 +242,16 @@ class Llama:
         next_token = next_token.reshape(-1).cpu().numpy()
 
         # Mutate requests with new tokens.
-        for request_idx, request in enumerate(requests):
+        for request_idx, request in enumerate(batch.requests):
+            if request.stage is RequestStage.DONE:  # NOTE: Important check!
+                continue
+
             curr_next_token = next_token[request_idx]
             request.output_tokens.append(curr_next_token)
+
+            if request.stage == RequestStage.DECODE:
+                batch.input_tokens[request_idx] = curr_next_token
+                batch.start_pos[request_idx] += 1
 
             # If generation sample EOS or hits max seq len, sets request stage
             # to DONE and sets request output_str.
@@ -383,11 +267,6 @@ class Llama:
             # Generation needs to continue so set stage to DECODE.
             else:
                 request.stage = RequestStage.DECODE
-
-    def update_kv_cache(self, requests: List[Request], batch: DataBatch):
-        for request_idx, request in enumerate(requests):
-            request.cache_k = batch.cache_k[request_idx, ...]
-            request.cache_v = batch.cache_v[request_idx, ...]
 
 
 @torch.inference_mode()

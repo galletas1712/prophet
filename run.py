@@ -27,10 +27,12 @@ def run_model(config):
         request = llm.create_request(prompt)
         requests[request.request_id] = request
 
+    llm.step_prefill()
+
     outputs = []
     while len(outputs) < len(prompts):
-        llm.step()
-        for completed_request_ids in llm.curr_step_completed_request_ids:
+        llm.step_decode()
+        for completed_request_ids in llm.done_requests:
             outputs.append(requests[completed_request_ids].output_str)
 
     print(f"Received outputs:")
