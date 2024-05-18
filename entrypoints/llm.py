@@ -1,6 +1,8 @@
-from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch
+from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch, CompletionType
 from schedulers import build_scheduler
 from models import build_model
+
+from typing import Any
 
 
 class LLM:
@@ -24,8 +26,8 @@ class LLM:
         self.cache_k = {}
         self.cache_v = {}
 
-    def create_request(self, prompt: str):
-        return self.scheduler.create_request(prompt)
+    def create_request(self, prompt: str | Any, completion_type: CompletionType):
+        return self.scheduler.create_request(prompt, completion_type)
 
     def step_prefill(self):
         request_batch = self.scheduler.schedule(RequestStage.PREFILL)
@@ -61,7 +63,7 @@ class LLM:
 
         self.model.step_decode(self.decode_batch)
         for slot_idx, slot_request in enumerate(self.decode_batch.requests):
-            if slot_request.stage is RequestStage.DONE:
+            if slot_request is not None and slot_request.stage is RequestStage.DONE:
                 self.done_requests.append(slot_request.request_id)
                 self.scheduler.remove_request(slot_request.request_id)
                 self.decode_batch.clear_slot(slot_idx)

@@ -1,7 +1,7 @@
-from typing import List
+from typing import List, Any
 from collections import OrderedDict
 
-from entrypoints.api import Request, RequestStage
+from entrypoints.api import Request, RequestStage, CompletionType
 from schedulers.utils import register_scheduler
 
 
@@ -16,11 +16,11 @@ class FCFS_Scheduler:
         self.request_dict = OrderedDict()
         self.next_id = 0
 
-    def create_request(self, prompt: str) -> Request:
+    def create_request(self, prompt: str | Any, completion_type: CompletionType) -> Request:
         request_id = self.next_id
         self.next_id += 1
 
-        request = Request(request_id, prompt)
+        request = Request(request_id, prompt, completion_type)
         self.request_dict[request_id] = request
 
         return request

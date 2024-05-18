@@ -317,8 +317,6 @@ class Transformer(nn.Module):
             params.rope_theta,
         )
 
-        self.kv_cache_shape = (params.max_seq_len, params.n_layers, params.dim)
-
     # Mask returned will be added to attention scores of shape
     # (bs, n_local_heads, seqlen, max_seq_len).
     @torch.inference_mode()

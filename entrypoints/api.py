@@ -1,8 +1,13 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Any
 
 import torch
+
+
+class CompletionType(Enum):
+    CHAT_COMPLETION = 0
+    TEXT_COMPLETION = 1
 
 
 class RequestStage(Enum):
@@ -14,25 +19,21 @@ class RequestStage(Enum):
 @dataclass
 class Request:
     request_id: int
-    stage: RequestStage
+    prompt: str | Any
+    completion_type: CompletionType
 
-    prompt_str: str
-    output_str: Optional[str]  # Populated when request stage set to DONE.
-
-    prompt_tokens: Optional[List[int]]  # Populated at prefill.
-    output_tokens: List[int]
-
+    stage: RequestStage = RequestStage.PREFILL
     idx_in_data_batch: Optional[int] = None
 
-    def __init__(self, request_id, prompt_str):
-        self.request_id = request_id
-        self.stage = RequestStage.PREFILL
+    prompt_tokens: Optional[List[int]] = None  # Populated at prefill.
+    output_tokens: List[int] = field(default_factory=list)
 
-        self.prompt_str = prompt_str
-        self.output_str = None
+    # Populated when request stage set to DONE.
+    output: Optional[str | Any] = None
 
-        self.prompt_tokens = None
-        self.output_tokens = []
+    # TODO: Populate these on DecodeDataBatch.clear_slot
+    cache_k: torch.Tensor | None = None
+    cache_v: torch.Tensor | None = None
 
 
 @dataclass

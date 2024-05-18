@@ -21,7 +21,7 @@ from fairscale.nn.model_parallel.initialize import (
     model_parallel_is_initialized,
 )
 
-from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch
+from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch, CompletionType
 from models.llama3.model import ModelArgs, Transformer
 from models.llama3.tokenizer import ChatFormat, Dialog, Message, Tokenizer
 
@@ -40,20 +40,11 @@ class ChatPrediction(TypedDict, total=False):
 
 @dataclass
 class GlobalGenerationParams:
-    max_gen_len: Optional[int]
-    temperature: float = (0.6,)
-    top_p: float = (0.9,)
-    logprobs: bool = (False,)
-    echo: bool = (False,)
-
-
-@dataclass
-class ModelParams:
-    max_batch_size: int
-    max_seq_len: int
-    n_layers: int
-    n_local_kv_heads: int
-    head_dim: int
+    max_gen_len: int
+    temperature: float
+    top_p: float
+    logprobs: bool
+    echo: bool
 
 
 class Llama:
@@ -139,44 +130,36 @@ class Llama:
         )
         head_dim = model_args.dim // model_args.n_heads
 
-        model_params = ModelParams(
-            max_batch_size,
-            max_seq_len,
-            model_args.n_layers,
-            n_local_kv_heads,
-            head_dim,
-        )
-
-        return Llama(model, tokenizer, model_params, model_args, glob_params)
+        return Llama(model, tokenizer, model_args, glob_params)
 
     def __init__(
         self,
         model: Transformer,
         tokenizer: Tokenizer,
-        model_params: ModelParams,  # TODO: remove model_params
         model_args: ModelArgs,
         glob_params: GlobalGenerationParams,
     ):
         self.model = model
         self.tokenizer = tokenizer
 
-        self.model_params = model_params
         self.model_args = model_args
 
         self.glob_params = glob_params
-        if self.glob_params.max_gen_len is None:  # TODO: redo this!
-            self.glob_params.max_gen_len = self.model_params.max_seq_len - 1
-
         self.stop_tokens = torch.tensor(list(tokenizer.stop_tokens))
         self.formatter = ChatFormat(tokenizer)
 
     @torch.inference_mode()
     def step_prefill(self, requests: List[Request]):
-        # Tokenize inputs. # TODO: chat tokenizer as well
+        # Tokenize prompts
         for request in requests:
-            request.prompt_tokens = self.tokenizer.encode(
-                request.prompt_str, bos=True, eos=False
-            )
+            if request.completion_type is CompletionType.CHAT_COMPLETION:
+                request.prompt_tokens = self.encode_chat_completion(
+                    request.prompt)
+            elif request.completion_type is CompletionType.TEXT_COMPLETION:
+                request.prompt_tokens = self.encode_text_completion(
+                    request.prompt)
+            else:
+                raise Exception("Invalid completion type")
 
         # Form the batch.
         prefill_batch = PrefillDataBatch(
@@ -243,7 +226,7 @@ class Llama:
 
         # Mutate requests with new tokens.
         for request_idx, request in enumerate(batch.requests):
-            if request.stage is RequestStage.DONE:  # NOTE: Important check!
+            if request is None or request.stage is RequestStage.DONE:  # NOTE: Important check!
                 continue
 
             curr_next_token = next_token[request_idx]
@@ -254,19 +237,57 @@ class Llama:
                 batch.start_pos[request_idx] += 1
 
             # If generation sample EOS or hits max seq len, sets request stage
-            # to DONE and sets request output_str.
+            # to DONE and decodes request output tokens.
             if (
                 curr_next_token == self.tokenizer.eos_id
                 or len(request.output_tokens) == self.glob_params.max_gen_len
+                or len(request.output_tokens) + len(request.prompt_tokens) == self.model_args.max_seq_len
             ):
-                request.output_str = self.tokenizer.decode(
-                    request.output_tokens
-                )
+                if request.completion_type is CompletionType.CHAT_COMPLETION:
+                    request.output = self.decode_chat_completion(
+                        request.output_tokens, None)
+                elif request.completion_type is CompletionType.TEXT_COMPLETION:
+                    request.output = self.decode_text_completion(
+                        request.output_tokens, None)
+
                 request.stage = RequestStage.DONE
 
             # Generation needs to continue so set stage to DECODE.
             else:
                 request.stage = RequestStage.DECODE
+
+    def encode_text_completion(self, prompt: str):
+        return self.tokenizer.encode(prompt, bos=True, eos=False)
+
+    def decode_text_completion(self, tokens: torch.Tensor, token_logprobs: torch.Tensor):
+        if self.glob_params.logprobs:
+            return {
+                "generation": self.tokenizer.decode(tokens),
+                "tokens": [self.tokenizer.decode([x]) for x in tokens],
+                "logprobs": token_logprobs,
+            }
+        return {"generation": self.tokenizer.decode(tokens)}
+
+    def encode_chat_completion(self, dialog: Dialog):
+        return self.formatter.encode_dialog_prompt(dialog)
+
+    def decode_chat_completion(self, tokens: torch.Tensor, token_logprobs: torch.Tensor):
+        if self.glob_params.logprobs:
+            return {
+                "generation": {
+                    "role": "assistant",
+                    "content": self.tokenizer.decode(tokens),
+                },
+                "tokens": [self.tokenizer.decode([x]) for x in tokens],
+                "logprobs": token_logprobs,
+            }
+
+        return {
+            "generation": {
+                "role": "assistant",
+                "content": self.tokenizer.decode(tokens),
+            },
+        }
 
 
 @torch.inference_mode()
