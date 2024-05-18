@@ -56,13 +56,13 @@ These are just a few of the many attractions that Paris has to offer. With so mu
 
     requests = {}
 
-    for prompt in prompts:
-        request = llm.create_request(prompt, CompletionType.TEXT_COMPLETION)
-        requests[request.request_id] = request
-
-    # for dialog in dialogs:
-    #     request = llm.create_request(dialog, CompletionType.CHAT_COMPLETION)
+    # for prompt in prompts:
+    #     request = llm.create_request(prompt, CompletionType.TEXT_COMPLETION)
     #     requests[request.request_id] = request
+
+    for dialog in dialogs:
+        request = llm.create_request(dialog, CompletionType.CHAT_COMPLETION)
+        requests[request.request_id] = request
 
     llm.step_prefill()
 
