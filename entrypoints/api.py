@@ -5,6 +5,10 @@ from typing import Optional, List, Any
 import torch
 
 
+class WorkerType (Enum):
+    PREFILL = 0
+    DECODE = 1
+
 class CompletionType(Enum):
     CHAT_COMPLETION = 0
     TEXT_COMPLETION = 1

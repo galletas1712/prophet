@@ -15,6 +15,9 @@ class FCFS_Scheduler:
 
         self.request_dict = OrderedDict()
         self.next_id = 0
+    
+    def add_request(self, request):
+        self.request_dict[request.request_id] = request
 
     def create_request(self, prompt: str | Any, completion_type: CompletionType) -> Request:
         request_id = self.next_id
