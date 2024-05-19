@@ -4,6 +4,7 @@ from models import build_model
 
 from typing import Any
 import torch
+import asyncio
 
 
 class LLM:
@@ -74,3 +75,101 @@ class LLM:
                 self.decode_batch.clear_slot(slot_idx)
 
         return done_requests
+
+# class DisaggregatedLLM:
+
+#     def __init__(self, model_config, scheduler_config, seed: int) -> None:
+#         # TODO: random library + numpy seed
+#         torch.manual_seed(seed)
+#         self.model = build_model(model_config)
+
+#         self.scheduler = build_scheduler(
+#             scheduler_config
+#         )
+
+#         self.decode_batch = DecodeDataBatch(
+#             model_config.max_batch_size,
+#             model_config.max_seq_len,
+#             self.model.model_args.n_layers,
+#             self.model.model_args.dim,
+#             self.model.tokenizer.pad_id
+#         )
+
+#         self.cache_k = {}
+#         self.cache_v = {}
+
+#     def create_request(self, prompt: str | Any, completion_type: CompletionType):
+#         return self.scheduler.create_request(prompt, completion_type)
+    
+    # def step (self):
+    #     asyncio.run (self.async_step())
+
+    # async def async_step(self):
+    #     self.curr_step_completed_request_ids = []
+
+    #     prefill_batch = self.scheduler.schedule(RequestStage.PREFILL)
+    #     decode_batch = self.scheduler.schedule(RequestStage.DECODE)
+
+    #     if len(prefill_batch) > 0:
+    #         prefill_promise = self.step_prefill(prefill_batch)
+
+    #     if len(decode_batch) > 0:
+    #         decode_promise = self.step_decode(decode_batch)
+        
+    #     prefill_task = asyncio.create_task(self.step_prefill(prefill_batch))
+    #     decode_task = asyncio.create_task(self.step_decode(prefill_batch))
+
+    #     await prefill_task
+    #     await decode_task
+
+    #     for _, request in enumerate(batch):
+    #         if request.stage is RequestStage.DONE:
+    #             self.curr_step_completed_request_ids.append(request.request_id)
+    #             self.scheduler.remove_request(request.request_id)
+
+    # async def step_prefill(self, request_batch=None):
+    #     if request_batch is None:
+    #         request_batch = self.scheduler.schedule(RequestStage.PREFILL)
+    #     prefill_batch_state = self.prefill_model.step_prefill(request_batch)
+    #     # NOTE: assumes idx is the same
+    #     for idx, request in enumerate(request_batch):
+    #         self.cache_k[request.request_id] = prefill_batch_state.cache_k[idx]
+    #         self.cache_v[request.request_id] = prefill_batch_state.cache_v[idx]
+    #     return prefill_batch_state
+
+    # async def step_decode(self, request_batch=None):
+    #     #  Get set of slots we can replace
+    #     replaceable_slots = []
+    #     requests_already_in = set()
+    #     for slot_idx, slot_request in enumerate(self.decode_batch.requests):
+    #         if slot_request is None:  # NOTE: we clear to None to actually clear the slot
+    #             replaceable_slots.append(slot_idx)
+    #         else:
+    #             requests_already_in.add(slot_request.request_id)
+
+    #     # TODO: move to the actual decode batch class, and use a map instead
+    #     if request_batch is None:
+    #         request_batch = self.scheduler.schedule(RequestStage.DECODE)
+    
+    #     curr_replaceable_slot_idx = 0
+    #     for scheduled_request in request_batch:
+    #         if scheduled_request.request_id not in requests_already_in:
+    #             self.decode_batch.fill_slot(
+    #                 curr_replaceable_slot_idx,
+    #                 scheduled_request,
+    #                 self.cache_k[scheduled_request.request_id],
+    #                 self.cache_v[scheduled_request.request_id]
+    #             )
+    #             curr_replaceable_slot_idx += 1
+
+    #     self.decode_model.step_decode(self.decode_batch)
+
+    #     done_requests = []
+    #     for slot_idx, slot_request in enumerate(self.decode_batch.requests):
+    #         if slot_request is not None and slot_request.stage is RequestStage.DONE:
+    #             # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
+    #             done_requests.append(slot_request.request_id)
+    #             self.scheduler.remove_request(slot_request.request_id)
+    #             self.decode_batch.clear_slot(slot_idx)
+
+    #     return done_requests
