@@ -7,7 +7,7 @@ from typing import List
 
 @hydra.main(config_path="config/", config_name="dummy_test", version_base=None)
 def run_model(config):
-    llm = LLM(config.model, config.scheduler)
+    llm = LLM(config.model, config.scheduler, config.seed)
 
     prompts = [
         # For these prompts, the expected answer is the natural continuation of the prompt
@@ -68,8 +68,8 @@ These are just a few of the many attractions that Paris has to offer. With so mu
 
     outputs = []
     while len(outputs) < len(prompts):
-        llm.step_decode()
-        for completed_request_ids in llm.done_requests:
+        done_requests = llm.step_decode()
+        for completed_request_ids in done_requests:
             outputs.append(requests[completed_request_ids].output)
 
     print(f"Received outputs:")

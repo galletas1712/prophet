@@ -3,11 +3,14 @@ from schedulers import build_scheduler
 from models import build_model
 
 from typing import Any
+import torch
 
 
 class LLM:
 
-    def __init__(self, model_config, scheduler_config) -> None:
+    def __init__(self, model_config, scheduler_config, seed: int) -> None:
+        # TODO: random library + numpy seed
+        torch.manual_seed(seed)
         self.model = build_model(model_config)
 
         self.scheduler = build_scheduler(
@@ -22,7 +25,6 @@ class LLM:
             self.model.tokenizer.pad_id
         )
 
-        self.done_requests = []
         self.cache_k = {}
         self.cache_v = {}
 
@@ -62,8 +64,13 @@ class LLM:
                 curr_replaceable_slot_idx += 1
 
         self.model.step_decode(self.decode_batch)
+
+        done_requests = []
         for slot_idx, slot_request in enumerate(self.decode_batch.requests):
             if slot_request is not None and slot_request.stage is RequestStage.DONE:
-                self.done_requests.append(slot_request.request_id)
+                # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
+                done_requests.append(slot_request.request_id)
                 self.scheduler.remove_request(slot_request.request_id)
                 self.decode_batch.clear_slot(slot_idx)
+
+        return done_requests

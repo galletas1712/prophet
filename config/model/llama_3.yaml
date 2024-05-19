@@ -6,11 +6,10 @@ tokenizer_path: model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model
 max_seq_len: 512
 max_batch_size: 16
 model_parallel_size: 1
-seed: 0
 
 global_generation_params:
-  max_gen_len: 64
-  temperature: 0.6
+  max_gen_len: 128
+  temperature: 0
   top_p: 0.9
   logprobs: False
   echo: False

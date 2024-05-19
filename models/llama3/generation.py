@@ -239,7 +239,7 @@ class Llama:
             # If generation sample EOS or hits max seq len, sets request stage
             # to DONE and decodes request output tokens.
             if (
-                curr_next_token == self.tokenizer.eos_id
+                curr_next_token in self.tokenizer.stop_tokens
                 or len(request.output_tokens) == self.glob_params.max_gen_len
                 or len(request.output_tokens) + len(request.prompt_tokens) == self.model_args.max_seq_len
             ):
