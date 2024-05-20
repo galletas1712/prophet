@@ -11,22 +11,32 @@ class Disaggregation_Coordinator:
   def __init__ (self, model_config, scheduler_config):
     self.prefill_request_queue = Queue ()
     self.decode_request_queue = Queue ()
+    self.output_queue = Queue ()
 
     self.prefill_worker = Worker (model_config, scheduler_config, WorkerType.PREFILL, gpu_id=0)
     self.decode_worker = Worker (model_config, scheduler_config, WorkerType.DECODE, gpu_id=1)
      
-    self.prefill_process = Process (target= self.prefill_worker.worker_main, args = (self.prefill_request_queue))
-    self.decode_process = Process (target= self.decode_worker.worker_main, args = (self.decode_request_queue))
+    self.prefill_process = Process (target= self.prefill_worker.worker_main, args = (self.prefill_request_queue, self.decode_request_queue))
+    self.decode_process = Process (target= self.decode_worker.worker_main, args = (self.decode_request_queue, self.output_queue))
+    self.output_process = Process(target=self.print_output)
 
     self.prefill_process.start()
     self.decode_process.start()
 
     def send_prompt (self, prompt, completion_type):
         self.prefill_request_queue.put(prompt, completion_type)
+    
+    def monitor_output(self):
+        while True:
+            output = self.output_queue.get()
+            if output["output"] == SHUTDOWN_PROMPT:
+                break
+            print(output)
 
     def shutdown (self):
-        self.prefill_request_queue.put(SHUTDOWN_PROMPT)
-        self.decode_request_queue.put(SHUTDOWN_PROMPT)
+        self.prefill_request_queue.put(SHUTDOWN_PROMPT, None)
+        self.decode_request_queue.put(SHUTDOWN_PROMPT, None)
+        self.output_queue.put({"output": SHUTDOWN_PROMPT})
 
         self.prefill_process.join()
         self.decode_process.join()
@@ -35,11 +45,10 @@ class Worker:
     
     def __init__(self, model_config, scheduler_config, worker_type, gpu_id=0):
         # TODO: abstract scheduler config based on worker_type
-        self.scheduler = build_scheduler(
-            scheduler_config
-        )
+        self.scheduler = build_scheduler(scheduler_config)
         self.type = worker_type
         self.model = build_model(model_config)
+
         self.gpu_id = gpu_id
         self.device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
         self.model.to(self.device)
@@ -58,11 +67,12 @@ class Worker:
         self.active = True
         self.request_id = 0
 
-    def worker_main(self, queue):
-        self.queue = queue
+    def worker_main(self, in_queue, out_queue):
+        self.in_queue = in_queue
+        self.out_queue = out_queue
         while self.active:
             if len(self.queue) > 0:
-                curr_prompt, curr_completion_type = self.queue.pop()
+                curr_prompt, curr_completion_type = self.in_queue.get()
                 if curr_prompt == SHUTDOWN_PROMPT:
                     self.active = False
                     break
@@ -71,14 +81,15 @@ class Worker:
                 self.scheduler.add_request(curr_request)
                 self.request_id += 1
             
-            if len(self.queue) == 0:
-                self.step()
+            if len(self.in_queue) == 0:
+                output = self.step()
+                self.out_queue.put(output)
           
     def step (self):
         if (self.type == WorkerType.PREFILL):
-            self.prefill_step ()
+            return self.prefill_step ()
         elif (self.type == WorkerType.DECODE):
-            self.decode_step ()
+            return self.decode_step ()
     
     def step_prefill(self):
         request_batch = self.scheduler.schedule(RequestStage.PREFILL)
@@ -118,7 +129,10 @@ class Worker:
         for slot_idx, slot_request in enumerate(self.decode_batch.requests):
             if slot_request is not None and slot_request.stage is RequestStage.DONE:
                 # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
-                done_requests.append(slot_request.request_id)
+                done_requests.append({
+                    "request_id": slot_request.request_id, 
+                    "output": slot_request.output
+                  })
                 self.scheduler.remove_request(slot_request.request_id)
                 self.decode_batch.clear_slot(slot_idx)
 
