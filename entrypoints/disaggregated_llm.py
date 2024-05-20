@@ -18,7 +18,7 @@ class Disaggregation_Coordinator:
      
     self.prefill_process = Process (target= self.prefill_worker.worker_main, args = (self.prefill_request_queue, self.decode_request_queue))
     self.decode_process = Process (target= self.decode_worker.worker_main, args = (self.decode_request_queue, self.output_queue))
-    self.output_process = Process(target=self.print_output)
+    self.output_process = Process(target=self.monitor_output)
 
     self.prefill_process.start()
     self.decode_process.start()
