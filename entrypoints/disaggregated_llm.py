@@ -4,51 +4,81 @@ from entrypoints.api import *
 from schedulers import build_scheduler
 from models import build_model
 
-class Coordinator:
+import torch
+
+SHUTDOWN_PROMPT = "SHUTDOWN_WORKER()"
+class Disaggregation_Coordinator:
   def __init__ (self, model_config, scheduler_config):
-     self.prefill_request_queue = Queue ()
-     self.decode_request_queue = Queue ()
+    self.prefill_request_queue = Queue ()
+    self.decode_request_queue = Queue ()
 
-
-     self.prefill_worker = Worker (model_config, scheduler_config, WorkerType.PREFILL)
-     self.decode_worker = Worker (model_config, scheduler_config, WorkerType.DECODE)
+    self.prefill_worker = Worker (model_config, scheduler_config, WorkerType.PREFILL, gpu_id=0)
+    self.decode_worker = Worker (model_config, scheduler_config, WorkerType.DECODE, gpu_id=1)
      
-     self.prefill_process = Process (target= self.prefill_worker.worker_main, args = (self.prefill_request_queue))
-     self.decode_process = Process (target= self.decode_worker.worker_main, args = (self.decode_request_queue))
+    self.prefill_process = Process (target= self.prefill_worker.worker_main, args = (self.prefill_request_queue))
+    self.decode_process = Process (target= self.decode_worker.worker_main, args = (self.decode_request_queue))
 
+    self.prefill_process.start()
+    self.decode_process.start()
+
+    def send_prompt (self, prompt, completion_type):
+        self.prefill_request_queue.put(prompt, completion_type)
+
+    def shutdown (self):
+        self.prefill_request_queue.put(SHUTDOWN_PROMPT)
+        self.decode_request_queue.put(SHUTDOWN_PROMPT)
+
+        self.prefill_process.join()
+        self.decode_process.join()
 
 class Worker:
     
-    def __init__(self, model_config, scheduler_config, worker_type):
+    def __init__(self, model_config, scheduler_config, worker_type, gpu_id=0):
         # TODO: abstract scheduler config based on worker_type
         self.scheduler = build_scheduler(
             scheduler_config
         )
         self.type = worker_type
         self.model = build_model(model_config)
+        self.gpu_id = gpu_id
+        self.device = torch.device(f'cuda:{self.gpu_id}' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
+
+        self.cache_k = {}
+        self.cache_v = {}
+        if self.type == WorkerType.DECODE:
+            self.decode_batch = DecodeDataBatch(
+                model_config.max_batch_size,
+                model_config.max_seq_len,
+                self.model.model_args.n_layers,
+                self.model.model_args.dim,
+                self.model.tokenizer.pad_id
+            )
 
         self.active = True
-
         self.request_id = 0
 
     def worker_main(self, queue):
         self.queue = queue
-        while self.active ()
+        while self.active:
             if len(self.queue) > 0:
-                curr_prompt = self.queue.pop()
-                curr_request = Request(self.request_id, curr_prompt, self.type)
+                curr_prompt, curr_completion_type = self.queue.pop()
+                if curr_prompt == SHUTDOWN_PROMPT:
+                    self.active = False
+                    break
+                curr_request = Request(self.request_id, curr_prompt, curr_completion_type)
+                curr_request.stage = RequestStage.PREFILL if self.type == WorkerType.PREFILL else RequestStage.DECODE
                 self.scheduler.add_request(curr_request)
                 self.request_id += 1
             
             if len(self.queue) == 0:
                 self.step()
           
-          
     def step (self):
-       if (self.type == WorkerType.PREFILL):
-          self.prefill_step ()
-       elif (self.type == WorkerType.DECODE):
-          self.decode_step ()
+        if (self.type == WorkerType.PREFILL):
+            self.prefill_step ()
+        elif (self.type == WorkerType.DECODE):
+            self.decode_step ()
     
     def step_prefill(self):
         request_batch = self.scheduler.schedule(RequestStage.PREFILL)
