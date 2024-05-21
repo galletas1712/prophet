@@ -1,0 +1,5 @@
+prefill_gpu: 0
+decode_gpu: 0
+
+prefill_port: 29400
+decode_port: 29401

@@ -21,7 +21,13 @@ from fairscale.nn.model_parallel.initialize import (
     model_parallel_is_initialized,
 )
 
-from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch, CompletionType
+from entrypoints.api import (
+    Request,
+    RequestStage,
+    PrefillDataBatch,
+    DecodeDataBatch,
+    CompletionType,
+)
 from models.llama3.model import ModelArgs, Transformer
 from models.llama3.tokenizer import ChatFormat, Dialog, Message, Tokenizer
 
@@ -88,7 +94,11 @@ class Llama:
             initialize_model_parallel(model_parallel_size)
 
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(local_rank)
+
+        available_devices = os.environ.get("CUDA_AVAILABLE_DEVICES", "0")
+        available_devices = [int(d) for d in available_devices.split(",")]
+
+        torch.cuda.set_device(available_devices[local_rank])
 
         if local_rank > 0:
             sys.stdout = open(os.devnull, "w")
@@ -154,10 +164,12 @@ class Llama:
         for request in requests:
             if request.completion_type is CompletionType.CHAT_COMPLETION:
                 request.prompt_tokens = self.encode_chat_completion(
-                    request.prompt)
+                    request.prompt
+                )
             elif request.completion_type is CompletionType.TEXT_COMPLETION:
                 request.prompt_tokens = self.encode_text_completion(
-                    request.prompt)
+                    request.prompt
+                )
             else:
                 raise Exception("Invalid completion type")
 
@@ -167,7 +179,7 @@ class Llama:
             self.model_args.max_seq_len,
             self.model_args.n_layers,
             self.model_args.dim,
-            self.tokenizer.pad_id
+            self.tokenizer.pad_id,
         )
 
         # Run through model, populating KV caches.
@@ -212,12 +224,14 @@ class Llama:
         # NOTE: logits = (bsz, max_input_tokens_len, encoding_universe_size)
         assert torch.all(batch.first_pad_idx > 0).item()
 
-        logits = logits[torch.arange(
-            len(batch.requests)), torch.clamp(batch.first_pad_idx - 1, 0), :]
+        logits = logits[
+            torch.arange(len(batch.requests)),
+            torch.clamp(batch.first_pad_idx - 1, 0),
+            :,
+        ]
 
         if self.glob_params.temperature > 0:
-            probs = torch.softmax(
-                logits / self.glob_params.temperature, dim=-1)
+            probs = torch.softmax(logits / self.glob_params.temperature, dim=-1)
             next_token = sample_top_p(probs, self.glob_params.top_p)
         else:
             next_token = torch.argmax(logits, dim=-1)
@@ -226,7 +240,9 @@ class Llama:
 
         # Mutate requests with new tokens.
         for request_idx, request in enumerate(batch.requests):
-            if request is None or request.stage is RequestStage.DONE:  # NOTE: Important check!
+            if (
+                request is None or request.stage is RequestStage.DONE
+            ):  # NOTE: Important check!
                 continue
 
             curr_next_token = next_token[request_idx]
@@ -241,14 +257,17 @@ class Llama:
             if (
                 curr_next_token in self.tokenizer.stop_tokens
                 or len(request.output_tokens) == self.glob_params.max_gen_len
-                or len(request.output_tokens) + len(request.prompt_tokens) == self.model_args.max_seq_len
+                or len(request.output_tokens) + len(request.prompt_tokens)
+                == self.model_args.max_seq_len
             ):
                 if request.completion_type is CompletionType.CHAT_COMPLETION:
                     request.output = self.decode_chat_completion(
-                        request.output_tokens, None)
+                        request.output_tokens, None
+                    )
                 elif request.completion_type is CompletionType.TEXT_COMPLETION:
                     request.output = self.decode_text_completion(
-                        request.output_tokens, None)
+                        request.output_tokens, None
+                    )
 
                 request.stage = RequestStage.DONE
 
@@ -259,7 +278,9 @@ class Llama:
     def encode_text_completion(self, prompt: str):
         return self.tokenizer.encode(prompt, bos=True, eos=False)
 
-    def decode_text_completion(self, tokens: torch.Tensor, token_logprobs: torch.Tensor):
+    def decode_text_completion(
+        self, tokens: torch.Tensor, token_logprobs: torch.Tensor
+    ):
         if self.glob_params.logprobs:
             return {
                 "generation": self.tokenizer.decode(tokens),
@@ -271,7 +292,9 @@ class Llama:
     def encode_chat_completion(self, dialog: Dialog):
         return self.formatter.encode_dialog_prompt(dialog)
 
-    def decode_chat_completion(self, tokens: torch.Tensor, token_logprobs: torch.Tensor):
+    def decode_chat_completion(
+        self, tokens: torch.Tensor, token_logprobs: torch.Tensor
+    ):
         if self.glob_params.logprobs:
             return {
                 "generation": {
