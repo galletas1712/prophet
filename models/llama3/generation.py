@@ -227,7 +227,8 @@ class Llama:
                 continue
 
             curr_next_token = next_token[request_idx]
-            request.output_tokens.append(curr_next_token)
+            if curr_next_token not in self.tokenizer.stop_tokens:
+                request.output_tokens.append(curr_next_token)
 
             if request.stage == RequestStage.DECODE:
                 batch.input_tokens[request_idx] = curr_next_token
