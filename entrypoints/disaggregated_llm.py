@@ -9,7 +9,7 @@ from models import build_model
 SHUTDOWN_PROMPT = "SHUTDOWN_WORKER()"
 
 
-class Disaggregation_Coordinator:
+class DisaggregationCoordinator:
     def __init__(self, coordinator_config, model_config, scheduler_config):
         self.prefill_request_queue = Queue()
         self.decode_request_queue = Queue()

@@ -1,5 +1,5 @@
 import hydra
-from entrypoints.disaggregated_llm import Disaggregation_Coordinator
+from entrypoints.disaggregated_llm import DisaggregationCoordinator
 from entrypoints.api import CompletionType
 from models.llama3.tokenizer import Dialog
 from typing import List
@@ -7,7 +7,7 @@ from typing import List
 
 @hydra.main(config_path="config/", config_name="dummy_test", version_base=None)
 def run_model(config):
-    llm = Disaggregation_Coordinator(
+    llm = DisaggregationCoordinator(
         config.coordinator, config.model, config.scheduler
     )
 

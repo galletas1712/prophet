@@ -1,5 +1,5 @@
 import hydra
-from entrypoints import LLM, Disaggregation_Coordinator
+from entrypoints import LLM, DisaggregationCoordinator
 from entrypoints.api import CompletionType
 from models.llama3.tokenizer import Dialog
 from typing import List

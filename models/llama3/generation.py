@@ -1,25 +1,15 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed in accordance with the terms of the Llama 3 Community License Agreement.
 
-# import pdb
-import fairscale.nn.model_parallel.initialize as fs_init
-
 from dataclasses import dataclass
 import json
 import os
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple, TypedDict
-from enum import Enum
+from typing import List, Optional, TypedDict
 
 import torch
-import torch.nn.functional as F
-from fairscale.nn.model_parallel.initialize import (
-    get_model_parallel_rank,
-    initialize_model_parallel,
-    model_parallel_is_initialized,
-)
 
 from entrypoints.api import (
     Request,
@@ -61,7 +51,8 @@ class Llama:
         max_seq_len: int,
         max_batch_size: int,
         glob_params: GlobalGenerationParams,
-        model_parallel_size: Optional[int] = None,
+        model_parallel_size: int = 1, # TODO: figure out model parallel
+        model_parallel_rank: int = 0, # NOTE: Must be 0 for Llama-8B (see below)
     ) -> "Llama":
         """
         Build a Llama instance by initializing and loading a model checkpoint.
@@ -88,11 +79,6 @@ class Llama:
         if not torch.distributed.is_initialized():
             torch.distributed.init_process_group("nccl")
 
-        if not model_parallel_is_initialized():
-            if model_parallel_size is None:
-                model_parallel_size = int(os.environ.get("WORLD_SIZE", 1))
-            initialize_model_parallel(model_parallel_size)
-
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
         available_devices = os.environ.get("CUDA_AVAILABLE_DEVICES", "0")
@@ -112,7 +98,7 @@ class Llama:
             checkpoints
         ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
 
-        ckpt_path = checkpoints[get_model_parallel_rank()]
+        ckpt_path = checkpoints[model_parallel_rank]  # NOTE: Must be 0 for Llama-8B
         checkpoint = torch.load(ckpt_path, map_location="cpu")
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
@@ -134,11 +120,6 @@ class Llama:
         model.load_state_dict(checkpoint, strict=False)
 
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
-
-        n_local_kv_heads = (
-            model_args.n_kv_heads // fs_init.get_model_parallel_world_size()
-        )
-        head_dim = model_args.dim // model_args.n_heads
 
         return Llama(model, tokenizer, model_args, glob_params)
 
