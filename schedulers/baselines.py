@@ -75,20 +75,21 @@ class SRTP_Scheduler():
     def remove_request(self, finished_request_id):
         self.request_heap = [(length, request) for length, request in self.request_heap if request.id != finished_request_id]
 
-
 @register_scheduler("skip-join-mlfq")
 class SJMLFQ_scheduler():
     def __init__(
             self, 
             batch_size, 
             num_queues = 4, # TODO parameterize
-            queue_limits = [32, 64, 128, 256],
+            queue_limits = [16, 32, 64, 128],
+            starvation_limit = 256,
             **kwargs,
         ) -> None:
         super(SJMLFQ_scheduler, self).__init__()
         self.batch_size = batch_size
         self.num_queues = num_queues
         self.queue_limits = queue_limits
+        self.starvation_limit = starvation_limit
 
         self.request_queues = [[] for _ in range(num_queues)]
         self.next_id = 0
@@ -115,16 +116,22 @@ class SJMLFQ_scheduler():
     def schedule(self) -> List[Request]:
         batch = []
 
-        for i in range(self.num_queues):
-            for req_idx, (request, iteration_number) in enumerate(self.request_queues[i]):
+        for queue_idx in range(self.num_queues):
+            for req_idx, (request, iteration_number) in enumerate(self.request_queues[queue_idx]):
                 assert request.stage != RequestStage.DONE
-                if iteration_number >= self.queue_limits[i]:
-                    self._move_request_to_lower_queue(i, req_idx)
+                if iteration_number >= self.queue_limits[queue_idx]:
+                    self._move_request_to_lower_queue(queue_idx, req_idx)
                 batch.append(request)
-                self.request_queues[i][req_idx] = (request, iteration_number+1)
+                self.request_queues[queue_idx][req_idx] = (request, iteration_number+1)
 
                 if len(batch) == self.batch_size:
                     break 
+
+        for queue_idx, queue in enumerate(self.request_queues):
+            for req_idx, (request, iteration_number) in enumerate(queue):
+                if iteration_number >= self.starvation_limit:
+                    self._reset_request(queue_idx, req_idx)
+                    break
         
         return batch
     
@@ -134,7 +141,10 @@ class SJMLFQ_scheduler():
         request, iteration_number = self.request_queues[queue_idx].pop(req_idx)
         self.request_queues[queue_idx+1].append((request, iteration_number))
 
-    # TODO(cathy) add starve limit
+    def _reset_reqeust(self, queue_idx, req_idx):
+        request, iteration_number = self.request_queues[queue_idx].pop(req_idx)
+        assert iteration_number >= self.starvation_limit
+        self.request_queues[0].append((request, 0))
 
     def remove_request(self, finished_request_id):
         for i in range(self.num_queues):
