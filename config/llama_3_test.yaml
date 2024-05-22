@@ -1,6 +1,6 @@
 defaults:
   - model: llama_3
-  - coordinator: disaggregation_coordinator
+  - coordinator: mp_coordinator
   - scheduler: first_come_first_serve
   - _self_
   - override hydra/hydra_logging: disabled  

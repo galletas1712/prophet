@@ -4,9 +4,12 @@ from entrypoints.api import CompletionType, Request
 from models.llama3.tokenizer import Dialog
 from typing import List
 
+import torch
 
 @hydra.main(config_path="config/", config_name="llama_3_test", version_base=None)
 def run_model(config):
+    torch.cuda.set_device('cuda:0')
+
     llm = LLM(config.model, config.scheduler, config.seed, 'cuda:0')
 
     prompts = [
@@ -54,19 +57,16 @@ These are just a few of the many attractions that Paris has to offer. With so mu
         ],
     ]
 
-    requests = {}
     total_requests = 0
 
     for prompt in prompts:
         request = Request(prompt, CompletionType.TEXT_COMPLETION)
         llm.add_request(request)
-        requests[request.request_id] = request
         total_requests += 1
 
     for dialog in dialogs:
         request = Request(dialog, CompletionType.CHAT_COMPLETION)
         llm.add_request(request)
-        requests[request.request_id] = request
         total_requests += 1
     
     outputs = []
@@ -81,10 +81,10 @@ These are just a few of the many attractions that Paris has to offer. With so mu
         #         print("--------------------------------------------")
         # print("===================================================")
         done_requests = llm.step_decode()
-        for completed_request_id in done_requests:
-            print("Completed request", completed_request_id)
-            print(requests[completed_request_id].output)
-            outputs.append(requests[completed_request_id].output)
+        for request_id, output in done_requests.items():
+            print("Completed request", request_id)
+            print(output)
+            outputs.append(output)
         free_slots, _ = llm.decode_batch.get_free_slots()
         if len(free_slots) > 0:
             llm.step_prefill()

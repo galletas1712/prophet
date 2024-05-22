@@ -13,17 +13,10 @@ class LLM:
         model_config,
         scheduler_config,
         seed: int,
-        device: Optional[int] = None,
         worker_type: Optional[WorkerType] = None
     ) -> None:
         random.seed(seed)
         torch.manual_seed(seed)
-
-        if device is not None:
-            print("Loading model on device:", device)
-            torch.cuda.set_device(device)
-        else:
-            print("Loading model on device:", torch.cuda.current_device())
 
         assert scheduler_config.batch_size <= model_config.max_batch_size
 
@@ -54,15 +47,19 @@ class LLM:
         prefill_batch_state = self.model.step_prefill(request_batch)
         return prefill_batch_state
 
-    def step_decode(self) -> List[int]:
+    def step_decode(self) -> dict[str, Any]:
         # Returns a list of request ids that terminated after this decode step
         assert self.worker_type is not WorkerType.PREFILL
 
         #  Get set of slots we can replace
         free_slots, requests_already_in = self.decode_batch.get_free_slots()
         assert len(requests_already_in) + len(free_slots) == len(self.decode_batch.requests)
-
+        
         request_batch = self.scheduler.schedule(RequestStage.DECODE)
+
+        # If there's nothing to process
+        if len(request_batch) == 0 and len(requests_already_in) == 0:
+            return {}
 
         # print("Scheduled: ", [r.request_id for r in request_batch], "Replaceable slots: ", free_slots)
         # print("Requests already in:", requests_already_in)
@@ -75,15 +72,15 @@ class LLM:
 
         self.model.step_decode(self.decode_batch)
 
-        done_requests = []
+        results = {}
         for slot_idx, slot_request in enumerate(self.decode_batch.requests):
             if slot_request is not None and slot_request.stage is RequestStage.DONE:
                 # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
-                done_requests.append(slot_request.request_id)
+                results[slot_request.request_id] = slot_request.output
                 self.scheduler.remove_request(slot_request.request_id)
                 self.decode_batch.clear_slot(slot_idx)
 
-        return done_requests
+        return results
 
     def add_request(self, request: Request):
         self.scheduler.add_request(request)
