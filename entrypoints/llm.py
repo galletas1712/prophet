@@ -41,9 +41,6 @@ class LLM:
                 self.model.tokenizer.pad_id
             )
 
-    def create_request(self, prompt: str | Any, completion_type: CompletionType):
-        return self.scheduler.create_request(prompt, completion_type)
-
     def step_prefill(self) -> Optional[PrefillDataBatch]:
         # NOTE: sometimes we might call step_prefill with nothing in the queue
         # Returns a PrefillDataBatch if there were requests to prefill, None otherwise
@@ -87,3 +84,6 @@ class LLM:
                 self.decode_batch.clear_slot(slot_idx)
 
         return done_requests
+
+    def add_request(self, request: Request):
+        self.scheduler.add_request(request)

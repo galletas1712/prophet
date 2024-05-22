@@ -1,6 +1,6 @@
 import hydra
 from entrypoints import LLM
-from entrypoints.api import CompletionType
+from entrypoints.api import CompletionType, Request
 from models.llama3.tokenizer import Dialog
 from typing import List
 
@@ -58,12 +58,14 @@ These are just a few of the many attractions that Paris has to offer. With so mu
     total_requests = 0
 
     for prompt in prompts:
-        request = llm.create_request(prompt, CompletionType.TEXT_COMPLETION)
+        request = Request(prompt, CompletionType.TEXT_COMPLETION)
+        llm.add_request(request)
         requests[request.request_id] = request
         total_requests += 1
 
     for dialog in dialogs:
-        request = llm.create_request(dialog, CompletionType.CHAT_COMPLETION)
+        request = Request(dialog, CompletionType.CHAT_COMPLETION)
+        llm.add_request(request)
         requests[request.request_id] = request
         total_requests += 1
     

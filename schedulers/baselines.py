@@ -14,19 +14,9 @@ class FCFS_Scheduler:
         self.batch_size = batch_size
 
         self.request_dict = OrderedDict()
-        self.next_id = 0
     
     def add_request(self, request):
         self.request_dict[request.request_id] = request
-
-    def create_request(self, prompt: str | Any, completion_type: CompletionType) -> Request:
-        request_id = self.next_id
-        self.next_id += 1
-
-        request = Request(request_id, prompt, completion_type)
-        self.request_dict[request_id] = request
-
-        return request
 
     def schedule(self, stage: RequestStage) -> List[Request]:
         # Iterate over the requests dict, popping items that have finished.
