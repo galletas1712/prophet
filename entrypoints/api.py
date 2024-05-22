@@ -230,3 +230,14 @@ class DecodeDataBatch:
         self.eos_reached[idx] = True
         self.cache_k[idx] = 0
         self.cache_v[idx] = 0
+
+    def get_free_slots(self):
+        # Returns a list of slots that are free and Request objects that occupy all other slots
+        free_slots = []
+        requests_already_in = set()
+        for slot_idx, slot_request in enumerate(self.requests):
+            if slot_request is None:  # NOTE: we clear to None to actually clear the slot
+                free_slots.append(slot_idx)
+            else:
+                requests_already_in.add(slot_request.request_id)
+        return free_slots, requests_already_in

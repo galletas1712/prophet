@@ -2,16 +2,19 @@ from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataB
 from schedulers import build_scheduler
 from models import build_model
 
-from typing import Any
+from typing import Any, List, Optional
+import random
 import torch
-import asyncio
 
 
 class LLM:
 
     def __init__(self, model_config, scheduler_config, seed: int) -> None:
-        # TODO: random library + numpy seed
+        assert scheduler_config.batch_size <= model_config.max_batch_size
+
+        random.seed(seed)
         torch.manual_seed(seed)
+
         self.model = build_model(model_config)
 
         self.scheduler = build_scheduler(
@@ -32,8 +35,13 @@ class LLM:
     def create_request(self, prompt: str | Any, completion_type: CompletionType):
         return self.scheduler.create_request(prompt, completion_type)
 
-    def step_prefill(self):
+    def step_prefill(self) -> Optional[PrefillDataBatch]:
+        # Returns a PrefillDataBatch if there were requests to prefill, None otherwise
         request_batch = self.scheduler.schedule(RequestStage.PREFILL)
+        # print("Prefilling requests:", request_batch)
+        if len(request_batch) == 0:
+            return None
+
         prefill_batch_state = self.model.step_prefill(request_batch)
         # NOTE: assumes idx is the same
         for idx, request in enumerate(request_batch):
@@ -41,28 +49,28 @@ class LLM:
             self.cache_v[request.request_id] = prefill_batch_state.cache_v[idx]
         return prefill_batch_state
 
-    def step_decode(self):
-        #  Get set of slots we can replace
-        replaceable_slots = []
-        requests_already_in = set()
-        for slot_idx, slot_request in enumerate(self.decode_batch.requests):
-            if slot_request is None:  # NOTE: we clear to None to actually clear the slot
-                replaceable_slots.append(slot_idx)
-            else:
-                requests_already_in.add(slot_request.request_id)
+    def step_decode(self) -> List[int]:
+        # Returns a list of request ids that terminated after this decode step
 
-        # TODO: move to the actual decode batch class, and use a map instead
+        #  Get set of slots we can replace
+        free_slots, requests_already_in = self.decode_batch.get_free_slots()
+        assert len(requests_already_in) + len(free_slots) == len(self.decode_batch.requests)
+
         request_batch = self.scheduler.schedule(RequestStage.DECODE)
-        curr_replaceable_slot_idx = 0
-        for scheduled_request in request_batch:
-            if scheduled_request.request_id not in requests_already_in:
-                self.decode_batch.fill_slot(
-                    curr_replaceable_slot_idx,
-                    scheduled_request,
-                    self.cache_k[scheduled_request.request_id],
-                    self.cache_v[scheduled_request.request_id]
-                )
-                curr_replaceable_slot_idx += 1
+
+        # print("Scheduled: ", [r.request_id for r in request_batch], "Replaceable slots: ", free_slots)
+        # print("Requests already in:", requests_already_in)
+
+        # Allocate free decode batch slots for new requests that just finished prefilling
+        new_requests = filter(lambda r: r.request_id not in requests_already_in, request_batch)
+        for free_slot_idx, new_request in zip(free_slots, new_requests):
+            # print("Filling slot", free_slot_idx, "with request", new_request.request_id, new_request.prompt[:15])
+            self.decode_batch.fill_slot(
+                free_slot_idx,
+                new_request,
+                self.cache_k[new_request.request_id],
+                self.cache_v[new_request.request_id],
+            )
 
         self.model.step_decode(self.decode_batch)
 
