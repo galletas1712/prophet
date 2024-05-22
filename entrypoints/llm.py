@@ -1,4 +1,4 @@
-from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch, CompletionType
+from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch, CompletionType, WorkerType
 from schedulers import build_scheduler
 from models import build_model
 
@@ -9,25 +9,25 @@ import torch
 
 class LLM:
 
-    def __init__(self, model_config, scheduler_config, seed: int) -> None:
-        assert scheduler_config.batch_size <= model_config.max_batch_size
-
+    def __init__(self, model_config, scheduler_config, seed: int, worker_type: Optional[WorkerType] = None) -> None:
         random.seed(seed)
         torch.manual_seed(seed)
 
-        self.model = build_model(model_config)
+        assert scheduler_config.batch_size <= model_config.max_batch_size
 
+        self.worker_type = worker_type
+        self.model = build_model(model_config)
         self.scheduler = build_scheduler(
             scheduler_config
         )
-
-        self.decode_batch = DecodeDataBatch(
-            model_config.max_batch_size,
-            model_config.max_seq_len,
-            self.model.model_args.n_layers,
-            self.model.model_args.dim,
-            self.model.tokenizer.pad_id
-        )
+        if self.worker_type is not WorkerType.PREFILL:
+            self.decode_batch = DecodeDataBatch(
+                model_config.max_batch_size,
+                model_config.max_seq_len,
+                self.model.model_args.n_layers,
+                self.model.model_args.dim,
+                self.model.tokenizer.pad_id
+            )
 
         self.cache_k = {}
         self.cache_v = {}
@@ -36,7 +36,10 @@ class LLM:
         return self.scheduler.create_request(prompt, completion_type)
 
     def step_prefill(self) -> Optional[PrefillDataBatch]:
+        # NOTE: sometimes we might call step_prefill with nothing in the queue
         # Returns a PrefillDataBatch if there were requests to prefill, None otherwise
+        assert self.worker_type is not WorkerType.DECODE
+
         request_batch = self.scheduler.schedule(RequestStage.PREFILL)
         # print("Prefilling requests:", request_batch)
         if len(request_batch) == 0:
@@ -51,6 +54,7 @@ class LLM:
 
     def step_decode(self) -> List[int]:
         # Returns a list of request ids that terminated after this decode step
+        assert self.worker_type is not WorkerType.PREFILL
 
         #  Get set of slots we can replace
         free_slots, requests_already_in = self.decode_batch.get_free_slots()
