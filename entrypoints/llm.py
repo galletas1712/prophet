@@ -8,10 +8,22 @@ import torch
 
 
 class LLM:
-
-    def __init__(self, model_config, scheduler_config, seed: int, worker_type: Optional[WorkerType] = None) -> None:
+    def __init__(
+        self,
+        model_config,
+        scheduler_config,
+        seed: int,
+        device: Optional[int] = None,
+        worker_type: Optional[WorkerType] = None
+    ) -> None:
         random.seed(seed)
         torch.manual_seed(seed)
+
+        if device is not None:
+            print("Loading model on device:", device)
+            torch.cuda.set_device(device)
+        else:
+            print("Loading model on device:", torch.cuda.current_device())
 
         assert scheduler_config.batch_size <= model_config.max_batch_size
 
@@ -29,9 +41,6 @@ class LLM:
                 self.model.tokenizer.pad_id
             )
 
-        self.cache_k = {}
-        self.cache_v = {}
-
     def create_request(self, prompt: str | Any, completion_type: CompletionType):
         return self.scheduler.create_request(prompt, completion_type)
 
@@ -46,10 +55,6 @@ class LLM:
             return None
 
         prefill_batch_state = self.model.step_prefill(request_batch)
-        # NOTE: assumes idx is the same
-        for idx, request in enumerate(request_batch):
-            self.cache_k[request.request_id] = prefill_batch_state.cache_k[idx]
-            self.cache_v[request.request_id] = prefill_batch_state.cache_v[idx]
         return prefill_batch_state
 
     def step_decode(self) -> List[int]:
@@ -69,12 +74,7 @@ class LLM:
         new_requests = filter(lambda r: r.request_id not in requests_already_in, request_batch)
         for free_slot_idx, new_request in zip(free_slots, new_requests):
             # print("Filling slot", free_slot_idx, "with request", new_request.request_id, new_request.prompt[:15])
-            self.decode_batch.fill_slot(
-                free_slot_idx,
-                new_request,
-                self.cache_k[new_request.request_id],
-                self.cache_v[new_request.request_id],
-            )
+            self.decode_batch.fill_slot(free_slot_idx, new_request)
 
         self.model.step_decode(self.decode_batch)
 

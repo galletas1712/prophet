@@ -1,13 +1,13 @@
 import hydra
-from entrypoints import LLM, DisaggregationCoordinator
+from entrypoints import LLM
 from entrypoints.api import CompletionType
 from models.llama3.tokenizer import Dialog
 from typing import List
 
 
-@hydra.main(config_path="config/", config_name="dummy_test", version_base=None)
+@hydra.main(config_path="config/", config_name="llama_3_test", version_base=None)
 def run_model(config):
-    llm = LLM(config.model, config.scheduler, config.seed)
+    llm = LLM(config.model, config.scheduler, config.seed, 'cuda:0')
 
     prompts = [
         # For these prompts, the expected answer is the natural continuation of the prompt

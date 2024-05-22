@@ -3,11 +3,9 @@
 
 from dataclasses import dataclass
 import json
-import os
-import sys
 import time
 from pathlib import Path
-from typing import List, Optional, TypedDict
+from typing import List, TypedDict
 
 import torch
 
@@ -51,8 +49,6 @@ class Llama:
         max_seq_len: int,
         max_batch_size: int,
         glob_params: GlobalGenerationParams,
-        model_parallel_size: int = 1, # TODO: figure out model parallel
-        model_parallel_rank: int = 0, # NOTE: Must be 0 for Llama-8B (see below)
     ) -> "Llama":
         """
         Build a Llama instance by initializing and loading a model checkpoint.
@@ -76,29 +72,11 @@ class Llama:
             This method initializes the distributed process group, sets the device to CUDA,
             and loads the pre-trained model and tokenizer.
         """
-        if not torch.distributed.is_initialized():
-            torch.distributed.init_process_group("nccl")
-
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-
-        available_devices = os.environ.get("CUDA_AVAILABLE_DEVICES", "0")
-        available_devices = [int(d) for d in available_devices.split(",")]
-
-        torch.cuda.set_device(available_devices[local_rank])
-
-        if local_rank > 0:
-            sys.stdout = open(os.devnull, "w")
-
         start_time = time.time()
-
         checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
         assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
 
-        assert model_parallel_size == len(
-            checkpoints
-        ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
-
-        ckpt_path = checkpoints[model_parallel_rank]  # NOTE: Must be 0 for Llama-8B
+        ckpt_path = checkpoints[0]  # NOTE: Must be 0 for Llama-8B
         checkpoint = torch.load(ckpt_path, map_location="cpu")
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
