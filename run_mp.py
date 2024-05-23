@@ -98,11 +98,11 @@ def spawn_workers(config):
     num_available_gpus = torch.cuda.device_count()
 
     # Assert disabled for single GPU testing.
-    # assert (
-    #     config.coordinator.num_prefill_workers
-    #     + config.coordinator.num_decode_workers
-    #     <= num_available_gpus
-    # )
+    assert (
+        config.coordinator.num_prefill_workers
+        + config.coordinator.num_decode_workers
+        <= num_available_gpus
+    )
 
     prefill_queue = mp.Queue()
     decode_queue = mp.Queue()
@@ -112,6 +112,7 @@ def spawn_workers(config):
 
     for i in range(config.coordinator.num_prefill_workers):
         worker_device = f"cuda:{min(i, num_available_gpus - 1)}"
+        print("Starting prefill worker on", worker_device)
         worker = mp.Process(
             target=prefill_worker,
             args=(
@@ -124,8 +125,8 @@ def spawn_workers(config):
         processes.append(worker)
 
     for i in range(config.coordinator.num_decode_workers):
-        worker_device = config.coordinator.num_prefill_workers + i
-        worker_device = f"cuda:{min(worker_device + i, num_available_gpus - 1)}"
+        worker_device = f"cuda:{min(config.coordinator.num_prefill_workers + i, num_available_gpus - 1)}"
+        print("Starting decode worker on", worker_device)
 
         worker = mp.Process(
             target=decode_worker,
