@@ -57,6 +57,7 @@ class LLM:
         assert len(requests_already_in) + len(free_slots) == len(self.decode_batch.requests)
         
         request_batch = self.scheduler.schedule(RequestStage.DECODE)
+        # print("Scheduling decodes with prompt lengths", [(req.prompt, len(req.prompt)) for req in request_batch])
 
         # If there's nothing to process
         if len(request_batch) == 0 and len(requests_already_in) == 0:

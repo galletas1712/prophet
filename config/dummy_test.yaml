@@ -1,6 +1,6 @@
 defaults:
   - model: dummy
-  - scheduler: first_come_first_serve
+  - scheduler: fcfs
   - _self_
   - override hydra/hydra_logging: disabled  
   - override hydra/job_logging: disabled

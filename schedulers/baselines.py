@@ -1,6 +1,5 @@
-from typing import List, Any
 from collections import OrderedDict
-import heapq
+from typing import List
 
 from entrypoints.api import Request, RequestStage, CompletionType
 from schedulers.utils import register_scheduler
@@ -37,10 +36,10 @@ class FCFS_Scheduler:
 
 
 # TODO(cathy) change definition of promptlen for dialog completion
-@register_scheduler("srtp")
-class SRTP_Scheduler:
+@register_scheduler("srpt")
+class SRPT_Scheduler:
     def __init__(self, batch_size, **kwargs) -> None:
-        super(SRTP_Scheduler, self).__init__()
+        super(SRPT_Scheduler, self).__init__()
         self.batch_size = batch_size
         self.request_list = [] # TODO(cathy) could ordered dict here
 
