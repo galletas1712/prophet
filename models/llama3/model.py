@@ -307,7 +307,7 @@ class Transformer(nn.Module):
             batch_size,
             1,
             prompt_len,
-            self.params.max_seq_len,
+            cache_len,
             device="cuda",
         )
 

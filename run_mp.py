@@ -55,6 +55,7 @@ def prefill_worker(
         if num_pending_batching == 1:
             prefill_batch_state = llm.step_prefill()
             for request in prefill_batch_state.requests:
+                print(f"---- PREFILLED REQUEST {request.request_id} ----")
                 output_queue.put(request)
             num_pending_batching = 0
 

@@ -52,7 +52,8 @@ class LLM:
         assert self.worker_type is not WorkerType.PREFILL
 
         #  Get set of slots we can replace
-        free_slots, requests_already_in = self.decode_batch.get_free_slots()
+        free_slots = self.decode_batch.get_free_slots()
+        requests_already_in = self.decode_batch.get_requests_already_in()
         assert len(requests_already_in) + len(free_slots) == len(self.decode_batch.requests)
         
         request_batch = self.scheduler.schedule(RequestStage.DECODE)
