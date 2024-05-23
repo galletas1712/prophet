@@ -1,13 +1,16 @@
 import hydra
 from entrypoints import LLM
-from entrypoints.api import CompletionType
+from entrypoints.api import CompletionType, Request
 from models.llama3.tokenizer import Dialog
 from typing import List
 
+import torch
 
-@hydra.main(config_path="config/", config_name="dummy_test", version_base=None)
+@hydra.main(config_path="config/", config_name="llama_3_test", version_base=None)
 def run_model(config):
-    llm = LLM(config.model, config.scheduler, config.seed)
+    torch.cuda.set_device('cuda:0')
+
+    llm = LLM(config.model, config.scheduler, config.seed, 'cuda:0')
 
     prompts = [
         # For these prompts, the expected answer is the natural continuation of the prompt
@@ -25,6 +28,13 @@ def run_model(config):
     ]
 
     dialogs: List[Dialog] = [
+        [
+            {
+                "role": "system",
+                "content": "Always answer with emojis",
+            },
+            {"role": "user", "content": "How to go from Beijing to NY?"},
+        ],
         [{"role": "user", "content": "what is the recipe of mayonnaise?"}],
         [
             {"role": "user", "content": "I am going to Paris, what should I see?"},
@@ -45,35 +55,43 @@ These are just a few of the many attractions that Paris has to offer. With so mu
             {"role": "system", "content": "Always answer with Haiku"},
             {"role": "user", "content": "I am going to Paris, what should I see?"},
         ],
-        [
-            {
-                "role": "system",
-                "content": "Always answer with emojis",
-            },
-            {"role": "user", "content": "How to go from Beijing to NY?"},
-        ],
     ]
 
-    requests = {}
+    total_requests = 0
 
-    # for prompt in prompts:
-    #     request = llm.create_request(prompt, CompletionType.TEXT_COMPLETION)
-    #     requests[request.request_id] = request
+    for prompt in prompts:
+        request = Request(prompt, CompletionType.TEXT_COMPLETION)
+        llm.add_request(request)
+        total_requests += 1
 
     for dialog in dialogs:
-        request = llm.create_request(dialog, CompletionType.CHAT_COMPLETION)
-        requests[request.request_id] = request
+        request = Request(dialog, CompletionType.CHAT_COMPLETION)
+        llm.add_request(request)
+        total_requests += 1
+    
+    outputs = []
 
     llm.step_prefill()
-
-    outputs = []
-    while len(outputs) < len(prompts):
+    while len(outputs) < total_requests:
+        # for request in llm.decode_batch.requests:
+        #     if request is not None:
+        #         print(request.request_id)
+        #         print(request.stage)
+        #         print(llm.model.tokenizer.decode(request.output_tokens))
+        #         print("--------------------------------------------")
+        # print("===================================================")
         done_requests = llm.step_decode()
-        for completed_request_ids in done_requests:
-            outputs.append(requests[completed_request_ids].output)
-
+        for request_id, output in done_requests.items():
+            print("Completed request", request_id)
+            print(output)
+            outputs.append(output)
+        free_slots, _ = llm.decode_batch.get_free_slots()
+        if len(free_slots) > 0:
+            llm.step_prefill()
+    
     print(f"Received outputs:")
-    print(outputs)
+    for output in outputs:
+        print(output)
 
 
 if __name__ == "__main__":

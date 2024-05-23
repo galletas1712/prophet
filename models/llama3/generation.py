@@ -1,27 +1,21 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates.
 # This software may be used and distributed in accordance with the terms of the Llama 3 Community License Agreement.
 
-# import pdb
-import fairscale.nn.model_parallel.initialize as fs_init
-
 from dataclasses import dataclass
 import json
-import os
-import sys
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple, TypedDict
-from enum import Enum
+from typing import List, TypedDict
 
 import torch
-import torch.nn.functional as F
-from fairscale.nn.model_parallel.initialize import (
-    get_model_parallel_rank,
-    initialize_model_parallel,
-    model_parallel_is_initialized,
-)
 
-from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch, CompletionType
+from entrypoints.api import (
+    Request,
+    RequestStage,
+    PrefillDataBatch,
+    DecodeDataBatch,
+    CompletionType,
+)
 from models.llama3.model import ModelArgs, Transformer
 from models.llama3.tokenizer import ChatFormat, Dialog, Message, Tokenizer
 
@@ -55,7 +49,6 @@ class Llama:
         max_seq_len: int,
         max_batch_size: int,
         glob_params: GlobalGenerationParams,
-        model_parallel_size: Optional[int] = None,
     ) -> "Llama":
         """
         Build a Llama instance by initializing and loading a model checkpoint.
@@ -79,30 +72,11 @@ class Llama:
             This method initializes the distributed process group, sets the device to CUDA,
             and loads the pre-trained model and tokenizer.
         """
-        if not torch.distributed.is_initialized():
-            torch.distributed.init_process_group("nccl")
-
-        if not model_parallel_is_initialized():
-            if model_parallel_size is None:
-                model_parallel_size = int(os.environ.get("WORLD_SIZE", 1))
-            initialize_model_parallel(model_parallel_size)
-
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(local_rank)
-
-        if local_rank > 0:
-            sys.stdout = open(os.devnull, "w")
-
         start_time = time.time()
-
         checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
         assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
 
-        assert model_parallel_size == len(
-            checkpoints
-        ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {model_parallel_size}"
-
-        ckpt_path = checkpoints[get_model_parallel_rank()]
+        ckpt_path = checkpoints[0]  # NOTE: Must be 0 for Llama-8B
         checkpoint = torch.load(ckpt_path, map_location="cpu")
         with open(Path(ckpt_dir) / "params.json", "r") as f:
             params = json.loads(f.read())
@@ -124,11 +98,6 @@ class Llama:
         model.load_state_dict(checkpoint, strict=False)
 
         print(f"Loaded in {time.time() - start_time:.2f} seconds")
-
-        n_local_kv_heads = (
-            model_args.n_kv_heads // fs_init.get_model_parallel_world_size()
-        )
-        head_dim = model_args.dim // model_args.n_heads
 
         return Llama(model, tokenizer, model_args, glob_params)
 
@@ -154,10 +123,12 @@ class Llama:
         for request in requests:
             if request.completion_type is CompletionType.CHAT_COMPLETION:
                 request.prompt_tokens = self.encode_chat_completion(
-                    request.prompt)
+                    request.prompt
+                )
             elif request.completion_type is CompletionType.TEXT_COMPLETION:
                 request.prompt_tokens = self.encode_text_completion(
-                    request.prompt)
+                    request.prompt
+                )
             else:
                 raise Exception("Invalid completion type")
 
@@ -167,7 +138,7 @@ class Llama:
             self.model_args.max_seq_len,
             self.model_args.n_layers,
             self.model_args.dim,
-            self.tokenizer.pad_id
+            self.tokenizer.pad_id,
         )
 
         # Run through model, populating KV caches.
@@ -212,12 +183,14 @@ class Llama:
         # NOTE: logits = (bsz, max_input_tokens_len, encoding_universe_size)
         assert torch.all(batch.first_pad_idx > 0).item()
 
-        logits = logits[torch.arange(
-            len(batch.requests)), torch.clamp(batch.first_pad_idx - 1, 0), :]
+        logits = logits[
+            torch.arange(len(batch.requests)),
+            torch.clamp(batch.first_pad_idx - 1, 0),
+            :,
+        ]
 
         if self.glob_params.temperature > 0:
-            probs = torch.softmax(
-                logits / self.glob_params.temperature, dim=-1)
+            probs = torch.softmax(logits / self.glob_params.temperature, dim=-1)
             next_token = sample_top_p(probs, self.glob_params.top_p)
         else:
             next_token = torch.argmax(logits, dim=-1)
@@ -226,11 +199,14 @@ class Llama:
 
         # Mutate requests with new tokens.
         for request_idx, request in enumerate(batch.requests):
-            if request is None or request.stage is RequestStage.DONE:  # NOTE: Important check!
+            if (
+                request is None or request.stage is RequestStage.DONE
+            ):  # NOTE: Important check!
                 continue
 
             curr_next_token = next_token[request_idx]
-            request.output_tokens.append(curr_next_token)
+            if curr_next_token not in self.tokenizer.stop_tokens:
+                request.output_tokens.append(curr_next_token)
 
             if request.stage == RequestStage.DECODE:
                 batch.input_tokens[request_idx] = curr_next_token
@@ -241,14 +217,17 @@ class Llama:
             if (
                 curr_next_token in self.tokenizer.stop_tokens
                 or len(request.output_tokens) == self.glob_params.max_gen_len
-                or len(request.output_tokens) + len(request.prompt_tokens) == self.model_args.max_seq_len
+                or len(request.output_tokens) + len(request.prompt_tokens)
+                == self.model_args.max_seq_len
             ):
                 if request.completion_type is CompletionType.CHAT_COMPLETION:
                     request.output = self.decode_chat_completion(
-                        request.output_tokens, None)
+                        request.output_tokens, None
+                    )
                 elif request.completion_type is CompletionType.TEXT_COMPLETION:
                     request.output = self.decode_text_completion(
-                        request.output_tokens, None)
+                        request.output_tokens, None
+                    )
 
                 request.stage = RequestStage.DONE
 
@@ -259,7 +238,9 @@ class Llama:
     def encode_text_completion(self, prompt: str):
         return self.tokenizer.encode(prompt, bos=True, eos=False)
 
-    def decode_text_completion(self, tokens: torch.Tensor, token_logprobs: torch.Tensor):
+    def decode_text_completion(
+        self, tokens: torch.Tensor, token_logprobs: torch.Tensor
+    ):
         if self.glob_params.logprobs:
             return {
                 "generation": self.tokenizer.decode(tokens),
@@ -271,7 +252,9 @@ class Llama:
     def encode_chat_completion(self, dialog: Dialog):
         return self.formatter.encode_dialog_prompt(dialog)
 
-    def decode_chat_completion(self, tokens: torch.Tensor, token_logprobs: torch.Tensor):
+    def decode_chat_completion(
+        self, tokens: torch.Tensor, token_logprobs: torch.Tensor
+    ):
         if self.glob_params.logprobs:
             return {
                 "generation": {
