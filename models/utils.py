@@ -1,17 +1,3 @@
-from typing import Optional, List, Tuple
-from dataclasses import dataclass
-
-import torch
-
-
-@dataclass
-class ModelOutputs:
-    new_tokens: List[int]
-    new_tokens_decoded: List[str]
-    sequences_complete: List[bool]
-    new_kv_caches: List[torch.tensor]
-
-
 MODELS = {}
 
 

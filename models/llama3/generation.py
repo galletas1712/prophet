@@ -159,13 +159,22 @@ class Llama:
 
     @torch.inference_mode()
     def step_decode(self, decode_batch: DecodeDataBatch):
+        b_lim = decode_batch.get_forward_batch_dim()
+        s_lim = decode_batch.get_forward_seq_dim()
+
+        input_tokens = decode_batch.input_tokens[:b_lim]
+        start_pos = decode_batch.start_pos[:b_lim]
+        first_pad_idx = decode_batch.first_pad_idx[:b_lim]
+        cache_k = decode_batch.cache_k[:b_lim, :s_lim]
+        cache_v = decode_batch.cache_v[:b_lim, :s_lim]
+
         # Run through model, populating KV caches.
         logits = self.model.forward(
-            decode_batch.input_tokens,
-            decode_batch.start_pos,
-            decode_batch.first_pad_idx,
-            decode_batch.cache_k,
-            decode_batch.cache_v,
+            input_tokens,
+            start_pos,
+            first_pad_idx,
+            cache_k,
+            cache_v,
         )
 
         self.sample_and_add_token(
@@ -180,12 +189,13 @@ class Llama:
         logits: torch.Tensor,
     ):
         # Sample the next token.
-        # NOTE: logits = (bsz, max_input_tokens_len, encoding_universe_size)
+        # NOTE: logits = (bsz, max_input_tokens_len (1 for decode), encoding_universe_size)
         assert torch.all(batch.first_pad_idx > 0).item()
 
+        truncated_batch_size = logits.shape[0]
         logits = logits[
-            torch.arange(len(batch.requests)),
-            torch.clamp(batch.first_pad_idx - 1, 0),
+            torch.arange(truncated_batch_size),
+            torch.clamp(batch.first_pad_idx[:truncated_batch_size] - 1, 0),
             :,
         ]
 
@@ -199,6 +209,9 @@ class Llama:
 
         # Mutate requests with new tokens.
         for request_idx, request in enumerate(batch.requests):
+            if request_idx >= truncated_batch_size:
+                break
+
             if (
                 request is None or request.stage is RequestStage.DONE
             ):  # NOTE: Important check!
