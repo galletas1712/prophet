@@ -1,7 +1,7 @@
 defaults:
   - model: llama_3
   - coordinator: mp_coordinator
-  - scheduler: first_come_first_serve
+  - scheduler: skip_join_mlfq
   - _self_
   - override hydra/hydra_logging: disabled  
   - override hydra/job_logging: disabled

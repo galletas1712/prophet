@@ -13,7 +13,6 @@ class FCFS_Scheduler:
         super(FCFS_Scheduler, self).__init__()
 
         self.batch_size = batch_size
-
         self.request_dict = OrderedDict()
 
     def add_request(self, request):
@@ -37,72 +36,74 @@ class FCFS_Scheduler:
         self.request_dict.pop(finished_request_id)
 
 
+# TODO(cathy) change definition of promptlen for dialog completion
 @register_scheduler("srtp")
 class SRTP_Scheduler:
     def __init__(self, batch_size, **kwargs) -> None:
         super(SRTP_Scheduler, self).__init__()
         self.batch_size = batch_size
+        self.request_list = [] # TODO(cathy) could ordered dict here
 
-        self.request_heap = []
-        self.next_id = 0
-
-    def create_request(self, prompt: str) -> Request:
-        request_id = self.next_id
-        self.next_id += 1
-
-        request = Request(request_id, prompt)
-        heapq.heappush(self.request_heap, (len(prompt), request))
-
+    def add_request(self, request) -> Request:
+        left, right = 0, len(self.request_list)
+        while left < right:
+            mid = (left + right) // 2
+            if len(self.request_list[mid].prompt) < len(request.prompt):
+                left = mid + 1
+            else:
+                right = mid
+        self.request_list.insert(left, request)
         return request
 
-    def schedule(self) -> List[Request]:
+
+    def schedule(self, stage: RequestStage) -> List[Request]:
         batch = []
 
-        for _ in range(min(self.batch_size, len(self.request_heap))):
-            _, request = self.request_heap[0]
-            assert request.stage != RequestStage.DONE
-            batch.append(request)
+        idx = 0
+        while idx < len(self.request_list):
+            request = self.request_list[idx]
+            assert request.stage is not RequestStage.DONE
+            if request.stage == stage:
+                batch.append(request)
+                if len(batch) == self.batch_size:
+                    break
+            idx += 1
 
         return batch
 
     def remove_request(self, finished_request_id):
-        self.request_heap = [
-            (length, request)
-            for length, request in self.request_heap
-            if request.id != finished_request_id
+        self.request_list = [
+            request
+            for request in self.request_list
+            if request.request_id != finished_request_id
         ]
 
 
 @register_scheduler("skip_join_mlfq")
-class SJMLFQ_scheduler:
+class SkipJoinMLFQ_scheduler:
     def __init__(
         self,
         batch_size,
-        num_queues=4,  # TODO parameterize
-        queue_limits=[16, 32, 64, 128],
-        starvation_limit=256,
+        num_queues,
+        queue_limits,
+        starvation_limit,
         **kwargs,
     ) -> None:
-        super(SJMLFQ_scheduler, self).__init__()
+        super(SkipJoinMLFQ_scheduler, self).__init__()
         self.batch_size = batch_size
         self.num_queues = num_queues
         self.queue_limits = queue_limits
+        assert len(queue_limits) == num_queues
         self.starvation_limit = starvation_limit
 
         self.request_queues = [[] for _ in range(num_queues)]
-        self.next_id = 0
 
-    def create_request(self, prompt: str) -> Request:
-        request_id = self.next_id
-        self.next_id += 1
-
-        request = Request(request_id, prompt)
-
+    def add_request(self, request) -> Request:
         # skip-join step
         # priority is set to the quantum larger than the first iteration quantum
         request_added = False
         for i, limit in enumerate(self.queue_limits):
-            if len(prompt) < limit:
+            if len(request.prompt) < limit:
                 self.request_queues[i].append(
                     (request, 0)
                 )  # request, iteration_number
@@ -112,8 +113,9 @@ class SJMLFQ_scheduler:
             self.request_queues[-1].append((request, 0))
 
         return request
-
-    def schedule(self) -> List[Request]:
+    
+    # TODO(cathy) this is not tested!!
+    def schedule(self, stage: RequestStage) -> List[Request]:
         batch = []
 
         for queue_idx in range(self.num_queues):
@@ -121,17 +123,22 @@ class SJMLFQ_scheduler:
                 self.request_queues[queue_idx]
             ):
                 assert request.stage != RequestStage.DONE
-                if iteration_number >= self.queue_limits[queue_idx]:
-                    self._move_request_to_lower_queue(queue_idx, req_idx)
-                batch.append(request)
+                if request.stage != stage:
+                    continue
+                
                 self.request_queues[queue_idx][req_idx] = (
                     request,
                     iteration_number + 1,
                 )
+                # preemption
+                if iteration_number > self.queue_limits[queue_idx]:
+                    self._move_request_to_lower_queue(queue_idx, req_idx)
 
+                batch.append(request)
                 if len(batch) == self.batch_size:
                     break
 
+        # prevent starvation
         for queue_idx, queue in enumerate(self.request_queues):
             for req_idx, (request, iteration_number) in enumerate(queue):
                 if iteration_number >= self.starvation_limit:
@@ -154,7 +161,7 @@ class SJMLFQ_scheduler:
     def remove_request(self, finished_request_id):
         for i in range(self.num_queues):
             for req_idx, (request, _) in enumerate(self.request_queues[i]):
-                if request.id == finished_request_id:
+                if request.request_id == finished_request_id:
                     self.request_queues[i].pop(req_idx)
                     return
         raise ValueError(
