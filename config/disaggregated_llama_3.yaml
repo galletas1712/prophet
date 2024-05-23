@@ -1,0 +1,10 @@
+defaults:
+  - model: llama_3
+  - coordinator: mp_coordinator
+  - prefill_scheduler: ../scheduler/first_come_first_serve
+  - decode_scheduler: ../scheduler/first_come_first_serve
+  - _self_
+  - override hydra/hydra_logging: disabled  
+  - override hydra/job_logging: disabled
+
+seed: 1

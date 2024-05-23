@@ -15,7 +15,7 @@ class FCFS_Scheduler:
         self.batch_size = batch_size
 
         self.request_dict = OrderedDict()
-    
+
     def add_request(self, request):
         self.request_dict[request.request_id] = request
 
@@ -38,14 +38,14 @@ class FCFS_Scheduler:
 
 
 @register_scheduler("srtp")
-class SRTP_Scheduler():
+class SRTP_Scheduler:
     def __init__(self, batch_size, **kwargs) -> None:
         super(SRTP_Scheduler, self).__init__()
         self.batch_size = batch_size
 
         self.request_heap = []
         self.next_id = 0
-    
+
     def create_request(self, prompt: str) -> Request:
         request_id = self.next_id
         self.next_id += 1
@@ -66,18 +66,23 @@ class SRTP_Scheduler():
         return batch
 
     def remove_request(self, finished_request_id):
-        self.request_heap = [(length, request) for length, request in self.request_heap if request.id != finished_request_id]
+        self.request_heap = [
+            (length, request)
+            for length, request in self.request_heap
+            if request.id != finished_request_id
+        ]
 
-@register_scheduler("skip-join-mlfq")
-class SJMLFQ_scheduler():
+
+@register_scheduler("skip_join_mlfq")
+class SJMLFQ_scheduler:
     def __init__(
-            self, 
-            batch_size, 
-            num_queues = 4, # TODO parameterize
-            queue_limits = [16, 32, 64, 128],
-            starvation_limit = 256,
-            **kwargs,
-        ) -> None:
+        self,
+        batch_size,
+        num_queues=4,  # TODO parameterize
+        queue_limits=[16, 32, 64, 128],
+        starvation_limit=256,
+        **kwargs,
+    ) -> None:
         super(SJMLFQ_scheduler, self).__init__()
         self.batch_size = batch_size
         self.num_queues = num_queues
@@ -98,41 +103,48 @@ class SJMLFQ_scheduler():
         request_added = False
         for i, limit in enumerate(self.queue_limits):
             if len(prompt) < limit:
-                self.request_queues[i].append((request, 0))# request, iteration_number
+                self.request_queues[i].append(
+                    (request, 0)
+                )  # request, iteration_number
                 request_added = True
                 break
         if not request_added:
             self.request_queues[-1].append((request, 0))
-        
+
         return request
-    
+
     def schedule(self) -> List[Request]:
         batch = []
 
         for queue_idx in range(self.num_queues):
-            for req_idx, (request, iteration_number) in enumerate(self.request_queues[queue_idx]):
+            for req_idx, (request, iteration_number) in enumerate(
+                self.request_queues[queue_idx]
+            ):
                 assert request.stage != RequestStage.DONE
                 if iteration_number >= self.queue_limits[queue_idx]:
                     self._move_request_to_lower_queue(queue_idx, req_idx)
                 batch.append(request)
-                self.request_queues[queue_idx][req_idx] = (request, iteration_number+1)
+                self.request_queues[queue_idx][req_idx] = (
+                    request,
+                    iteration_number + 1,
+                )
 
                 if len(batch) == self.batch_size:
-                    break 
+                    break
 
         for queue_idx, queue in enumerate(self.request_queues):
             for req_idx, (request, iteration_number) in enumerate(queue):
                 if iteration_number >= self.starvation_limit:
                     self._reset_request(queue_idx, req_idx)
                     break
-        
+
         return batch
-    
+
     def _move_request_to_lower_queue(self, queue_idx, req_idx):
         if queue_idx == self.num_queues - 1:
             return
         request, iteration_number = self.request_queues[queue_idx].pop(req_idx)
-        self.request_queues[queue_idx+1].append((request, iteration_number))
+        self.request_queues[queue_idx + 1].append((request, iteration_number))
 
     def _reset_reqeust(self, queue_idx, req_idx):
         request, iteration_number = self.request_queues[queue_idx].pop(req_idx)
@@ -145,7 +157,6 @@ class SJMLFQ_scheduler():
                 if request.id == finished_request_id:
                     self.request_queues[i].pop(req_idx)
                     return
-        raise ValueError(f"Request with id {finished_request_id} not found in any queue")
-
-
-        
+        raise ValueError(
+            f"Request with id {finished_request_id} not found in any queue"
+        )
