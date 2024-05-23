@@ -40,8 +40,7 @@ def run_model(config):
             print()
             outputs.append(output)
         
-        free_slots, _ = llm.decode_batch.get_free_slots()
-        if len(free_slots) > 0:
+        if len(llm.decode_batch.get_free_slots()) > 0:
             llm.step_prefill()
 
 if __name__ == "__main__":

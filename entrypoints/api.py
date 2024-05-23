@@ -5,6 +5,7 @@ from typing import Optional, List, Any
 import torch
 import uuid
 
+from sortedcontainers import SortedSet
 
 class WorkerType (Enum):
     PREFILL = 0
@@ -81,11 +82,6 @@ class PrefillDataBatch:
 
         self.requests = requests
 
-        # Preallocate max size kv cache TODO: preallocate only up to max_input_tokens_len?
-        kv_dim = (batch_size, max_seq_len, n_layers, dim)
-        self.cache_k = torch.zeros(kv_dim, dtype=torch.bfloat16, device="cuda")
-        self.cache_v = torch.zeros(kv_dim, dtype=torch.bfloat16, device="cuda")
-
         # Build the input tokens tensor, consisting of tokens that haven't been
         # processed yet. If prefill, this is all input tokens. If decode, this
         # is the last outputted decode token.
@@ -99,8 +95,15 @@ class PrefillDataBatch:
                 max_input_tokens_len, len(input_tokens[-1])
             )
 
-            request.cache_k = self.cache_k[idx, :len(input_tokens[-1])]
-            request.cache_v = self.cache_v[idx, :len(input_tokens[-1])]
+        # Preallocate max size kv cache TODO: preallocate only up to max_input_tokens_len?
+        kv_dim = (batch_size, max_input_tokens_len, n_layers, dim)
+        self.cache_k = torch.zeros(kv_dim, dtype=torch.bfloat16, device="cuda")
+        self.cache_v = torch.zeros(kv_dim, dtype=torch.bfloat16, device="cuda")
+
+        # Each request will have a *view* of the KV cache in the data batch
+        for idx, request in enumerate(requests):
+            request.cache_k = self.cache_k[idx, :len(input_tokens[idx])]
+            request.cache_v = self.cache_v[idx, :len(input_tokens[idx])]
 
         # Set input tokens, padded to the maximum input length in the batch
         self.input_tokens = torch.full(
@@ -154,6 +157,10 @@ class DecodeDataBatch:
     cache_k: torch.Tensor
     cache_v: torch.Tensor
 
+    # Maintain set of indices for free and occupied slots
+    free_slots: SortedSet
+    occupied_slots: SortedSet
+
     def __init__(
         self,
         max_batch_size: int,
@@ -187,6 +194,10 @@ class DecodeDataBatch:
         self.cache_k = torch.zeros(kv_dim, device="cuda")
         self.cache_v = torch.zeros(kv_dim, device="cuda")
 
+        # All slots free at first
+        self.free_slots = SortedSet(range(max_batch_size))
+        self.occupied_slots = SortedSet()
+
     def fill_slot(self, idx: int, request: Request):
         # This property allows us to extract the kv cache at the right position
         request.idx_in_data_batch = idx
@@ -207,6 +218,9 @@ class DecodeDataBatch:
         self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.clone()
         self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.clone()
 
+        self.free_slots.discard(idx)
+        self.occupied_slots.add(idx)
+
     def clear_slot(self, idx: int):
         self.requests[idx].idx_in_batch = None
         self.requests[idx] = None
@@ -214,14 +228,19 @@ class DecodeDataBatch:
         self.start_pos[idx] = 0
         self.cache_k[idx] = 0
         self.cache_v[idx] = 0
-
+        self.free_slots.add(idx)
+        self.occupied_slots.discard(idx)
+    
     def get_free_slots(self):
-        # Returns a list of slots that are free and Request objects that occupy all other slots
-        free_slots = []
-        requests_already_in = set()
-        for slot_idx, slot_request in enumerate(self.requests):
-            if slot_request is None:  # NOTE: we clear to None to actually clear the slot
-                free_slots.append(slot_idx)
-            else:
-                requests_already_in.add(slot_request.request_id)
-        return free_slots, requests_already_in
+        return list(self.free_slots)
+    
+    def get_requests_already_in(self):
+        return [self.requests[idx].request_id for idx in self.occupied_slots]
+    
+    # For passing KV cache only up to the max slot in the current batch to the forward pass
+    def get_forward_batch_dim(self):
+        return max(self.occupied_slots) + 1
+    
+    # For passing KV cache only up to max prompt + output length + 1
+    def get_forward_seq_dim(self):
+        return torch.max(self.start_pos[self.occupied_slots]).item() + 2
