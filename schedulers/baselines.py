@@ -106,9 +106,6 @@ class SkipJoinMLFQ_Scheduler:
 
         self.batch_size = batch_size
 
-        # ID of the next request the scheduler will create.
-        self.next_id = 0
-
         # Scheduler 'timestep' / num batches it has scheduled.
         self.num_batches_scheduled = 0
 
@@ -120,13 +117,6 @@ class SkipJoinMLFQ_Scheduler:
         # Preemption / promotion thresholds.
         self.min_batches_before_preemption = min_batches_before_preemption
         self.max_batches_before_promotion = max_batches_before_promotion
-
-        # Queue of requests sorted by self.last_timestep_scheduled
-        # (descending).
-        self.old_to_young_requests = deque()
-
-        # Preempted requests.
-        self.preempted_requests = set([])
 
         # Keep track of the previous batch so that we can update its scores.
         # prev_batch holds prev requests themselves.
@@ -162,18 +152,20 @@ class SkipJoinMLFQ_Scheduler:
         # a request. Used to check if requests need promotion.
         self.last_timestep_scheduled = {}
 
-    def create_request(self, prompt: str) -> Request:
-        request_id = self.next_id
-        self.next_id += 1
-
-        request = Request(request_id, prompt)
+    def add_request(self, request: Request):
+        request_id = request.request_id
         self.id_to_request[request_id] = request
 
-        # Initialize last scheduled time to curr timestep /
-        # num_batches_scheduled. This means that we won't immediately preempt
-        # the request.
-        self.timestep_scheduled[request_id] = self.num_batches_scheduled
-        self.old_to_young_requests.append(request_id)
+        # Initialize first / last scheduled time to curr timestep - 1. This
+        # means that we will be eligible for promotion in
+        # max_batches_before_promotion steps inclusive of the current iteration.
+        self.last_timestep_scheduled[request_id] = (
+            self.num_batches_scheduled - 1
+        )
+
+        self.first_timestep_scheduled[request_id] = (
+            self.num_batches_scheduled - 1
+        )
 
         # Score request.
         request_score = self.scorer(request)
@@ -238,12 +230,21 @@ class SkipJoinMLFQ_Scheduler:
         if request_id not in self.first_timestep_scheduled:
             return False
 
+        # Num times request was consecutively scheduled assuming that it's also
+        # scheduled at the current timestep (self.num_batches_scheduled).
         num_consecutive_scheduled = (
             self.num_batches_scheduled
             - self.first_timestep_scheduled[request_id]
+            + 1
         )
 
-        return num_consecutive_scheduled >= self.min_batches_before_preemption
+        preemption_eligible = (
+            num_consecutive_scheduled > self.min_batches_before_preemption
+        )
+
+        # print(f"prompt = {request.prompt}, preemption_eligible = {preemption_eligible}")
+
+        return preemption_eligible
 
     def check_promotion_eligible(self, request):
         """Returns if a request should be promoted."""
@@ -252,28 +253,33 @@ class SkipJoinMLFQ_Scheduler:
         if request_id not in self.last_timestep_scheduled:
             return False
 
+        # Num times request was consecutively not scheduled assuming it's also
+        # not scheduled at the current timestep (self.num_batches_scheduled).
         num_consecutive_not_scheduled = (
             self.num_batches_scheduled
             - self.last_timestep_scheduled[request_id]
         )
 
-        return (
-            num_consecutive_not_scheduled >= self.max_batches_before_promotion
+        promotion_eligible = (
+            num_consecutive_not_scheduled > self.max_batches_before_promotion
         )
+
+        # print(f"prompt = {request.prompt}, promotion_eligible = {promotion_eligible}")
+
+        return promotion_eligible
 
     def promote_requests(self, batch):
         """Adds as many promotion eligible requests as possible to the batch."""
         curr_batch_request_ids = set([request.request_id for request in batch])
 
-        for request in self.old_to_young_requests:
+        for request_id, request in self.id_to_request.items():
             # If the batch is already full, don't try to promote more requests.
             if len(batch) == self.batch_size:
                 break
 
-            # If the current promotion candidate is ineligible, break because
-            # the next candidates will be even younger.
+            # Don't try to add to batch if request is not promotion eligible.
             if not self.check_promotion_eligible(request):
-                break
+                continue
 
             # Only add to batch if the promotion candidate is not already in it.
             if request.request_id not in curr_batch_request_ids:
@@ -359,7 +365,7 @@ class SkipJoinMLFQ_Scheduler:
         batch = [
             request
             for request in self.prev_batch
-            if self.check_preemption_eligible(request)
+            if not self.check_preemption_eligible(request)
         ]
 
         # Add as many promotion eligible requests as possible.
@@ -370,7 +376,10 @@ class SkipJoinMLFQ_Scheduler:
 
         # Update request metadata for scheduling.
         self.update_ages(batch, self.prev_batch)
+
+        # Other scheduler state updates.
         self.prev_batch = batch
+        self.num_batches_scheduled += 1
 
         return batch
 
@@ -379,6 +388,8 @@ class SkipJoinMLFQ_Scheduler:
             raise ValueError(
                 f"Request with id {finished_request_id} not found in any queue"
             )
+
+        del self.id_to_request[finished_request_id]
 
         queue_idx, req_idx = self.request_positions[finished_request_id]
         self.request_queues[queue_idx].pop(req_idx)
