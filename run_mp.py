@@ -2,6 +2,7 @@ import random
 import hydra
 import torch
 import torch.multiprocessing as mp
+import time
 
 from queue import Empty
 
@@ -32,6 +33,7 @@ def prefill_worker(
     device: int,
     input_queue: mp.Queue,
     output_queue: mp.Queue,
+    model_load_barrier: mp.Barrier,
 ):
     torch.cuda.set_device(device)
     llm = LLM(
@@ -40,24 +42,30 @@ def prefill_worker(
         config.seed,
         worker_type=WorkerType.PREFILL,
     )
+    model_load_barrier.wait()
     num_pending_batching = 0
     while True:
-        request = input_queue.get()
-        # Terminate on None
-        if request is None:
-            return
-        llm.add_request(request)
-        num_pending_batching += 1
+        while num_pending_batching < config.prefill_scheduler.batch_size:
+            try:
+                request = input_queue.get_nowait()
+                # Terminate on None
+                if request is None:
+                    return
+                llm.add_request(request)
+                num_pending_batching += 1
+            except Empty:
+                # OK if no new requests, continue decoding old requests
+                break
 
-        # NOTE: no batching for now.
-        # TODO: CHANGE BATCHING SIZE (also check with scheduler batching
-        # size and max_batch_size) and timeout as well?
-        if num_pending_batching == 1:
-            prefill_batch_state = llm.step_prefill()
-            for request in prefill_batch_state.requests:
-                print(f"---- PREFILLED REQUEST {request.request_id} ----")
-                output_queue.put(request)
-            num_pending_batching = 0
+        prefill_batch_state = llm.step_prefill()
+        if prefill_batch_state is None:
+            continue
+
+        for request in prefill_batch_state.requests:
+            print(f"---- PREFILLED REQUEST {request.request_id} ----")
+            output_queue.put(request)
+
+        num_pending_batching = 0
 
 
 def decode_worker(
@@ -65,6 +73,7 @@ def decode_worker(
     device: int,
     input_queue: mp.Queue,
     output_queue: mp.Queue,
+    model_load_barrier: mp.Barrier,
 ):
     torch.cuda.set_device(device)
     llm = LLM(
@@ -73,20 +82,30 @@ def decode_worker(
         config.seed,
         worker_type=WorkerType.DECODE,
     )
+    model_load_barrier.wait()
     while True:
         try:
             request = input_queue.get_nowait()
             # Terminate on None
             if request is None:
                 return
+            # First token (from prefill)
+            request.benchmark_metrics.received_token()
             llm.add_request(request)
         except Empty:
             # OK if no new requests, continue decoding old requests
             pass
 
-        done_requests = llm.step_decode()
-        for request_id, output in done_requests.items():
-            output_queue.put((request_id, output))
+        done_requests, request_batch = llm.step_decode()
+
+        # Add benchmark times for decode tokens
+        torch.cuda.synchronize()
+        for request in request_batch:
+            request.benchmark_metrics.received_token()
+
+        # NOTE: KV cache was already deleted so it's fine to send whole request object
+        for request in done_requests:
+            output_queue.put(request)
 
 
 @hydra.main(
@@ -111,6 +130,8 @@ def spawn_workers(config):
 
     processes = []
 
+    model_load_barrier = mp.Barrier(config.coordinator.num_prefill_workers + config.coordinator.num_decode_workers + 1)
+
     for i in range(config.coordinator.num_prefill_workers):
         worker_device = f"cuda:{min(i, num_available_gpus - 1)}"
         print("Starting prefill worker on", worker_device)
@@ -121,6 +142,7 @@ def spawn_workers(config):
                 worker_device,
                 prefill_queue,
                 decode_queue,
+                model_load_barrier,
             ),
         )
         processes.append(worker)
@@ -136,6 +158,7 @@ def spawn_workers(config):
                 worker_device,
                 decode_queue,
                 result_queue,
+                model_load_barrier
             ),
         )
         processes.append(worker)
@@ -143,16 +166,22 @@ def spawn_workers(config):
     for p in processes:
         p.start()
 
+    model_load_barrier.wait()
+
     # Send requests to workers.
     requests = sample_requests()
     for request in requests:
+        print(f"---- STARTED REQUEST {request.request_id, request.prompt[:20]} ----")
         prefill_queue.put(request)
-
+    
     for _ in range(len(requests)):
-        request_id, output = result_queue.get()
+        request = result_queue.get()
+        
+        request.benchmark_metrics.finished_request()
 
-        print(f"---- COMPLETED REQUEST {request_id} ----")
-        print(output)
+        print(f"---- COMPLETED REQUEST {request.request_id} ----")
+        print(request.output)
+        print(request.benchmark_metrics)
         print()
 
     # Send terminate signal.

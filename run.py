@@ -33,12 +33,12 @@ def run_model(config):
     llm.step_prefill()
     
     while len(outputs) < total_requests:
-        done_requests = llm.step_decode()
-        for request_id, output in done_requests.items():
-            print(f"---- COMPLETED REQUEST {request_id} ----")
-            print(output)
+        done_requests, _ = llm.step_decode()
+        for request in done_requests:
+            print(f"---- COMPLETED REQUEST {request.request_id} ----")
+            print(request.output)
             print()
-            outputs.append(output)
+            outputs.append(request.output)
         
         if len(llm.decode_batch.get_free_slots()) > 0:
             llm.step_prefill()

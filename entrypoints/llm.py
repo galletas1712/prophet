@@ -61,7 +61,7 @@ class LLM:
 
         # If there's nothing to process
         if len(request_batch) == 0 and len(requests_already_in) == 0:
-            return {}
+            return {}, []
 
         # print("Scheduled: ", [r.request_id for r in request_batch], "Replaceable slots: ", free_slots)
         # print("Requests already in:", requests_already_in)
@@ -74,15 +74,17 @@ class LLM:
 
         self.model.step_decode(self.decode_batch)
 
-        results = {}
+        done_requests = []
         for slot_idx, slot_request in enumerate(self.decode_batch.requests):
             if slot_request is not None and slot_request.stage is RequestStage.DONE:
                 # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
-                results[slot_request.request_id] = slot_request.output
                 self.scheduler.remove_request(slot_request.request_id)
                 self.decode_batch.clear_slot(slot_idx)
+                del slot_request.cache_k
+                del slot_request.cache_v
+                done_requests.append(slot_request)
 
-        return results
+        return done_requests, request_batch
 
     def add_request(self, request: Request):
         self.scheduler.add_request(request)

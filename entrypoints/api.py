@@ -7,6 +7,8 @@ import uuid
 
 from sortedcontainers import SortedSet
 
+from entrypoints.benchmark import BenchmarkMetrics
+
 class WorkerType (Enum):
     PREFILL = 0
     DECODE = 1
@@ -41,6 +43,9 @@ class Request:
     # Populated on prefill
     cache_k: torch.Tensor | None = None
     cache_v: torch.Tensor | None = None
+
+    # For benchmarking
+    benchmark_metrics: BenchmarkMetrics = field(default_factory=BenchmarkMetrics)
 
 
 @dataclass
