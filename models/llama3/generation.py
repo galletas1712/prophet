@@ -17,19 +17,7 @@ from entrypoints.api import (
     CompletionType,
 )
 from models.llama3.model import ModelArgs, Transformer
-from models.llama3.tokenizer import ChatFormat, Dialog, Message, Tokenizer
-
-
-class CompletionPrediction(TypedDict, total=False):
-    generation: str
-    tokens: List[str]  # not required
-    logprobs: List[float]  # not required
-
-
-class ChatPrediction(TypedDict, total=False):
-    generation: Message
-    tokens: List[str]  # not required
-    logprobs: List[float]  # not required
+from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 
 
 @dataclass
@@ -115,18 +103,18 @@ class Llama:
 
         self.glob_params = glob_params
         self.stop_tokens = torch.tensor(list(tokenizer.stop_tokens))
-        self.formatter = ChatFormat(tokenizer)
+        self.formatter = LlamaFormatter(tokenizer)
 
     @torch.inference_mode()
     def step_prefill(self, requests: List[Request]):
         # Tokenize prompts
         for request in requests:
             if request.completion_type is CompletionType.CHAT_COMPLETION:
-                request.prompt_tokens = self.encode_chat_completion(
+                request.prompt_tokens = self.formatter.encode_chat_completion(
                     request.prompt
                 )
             elif request.completion_type is CompletionType.TEXT_COMPLETION:
-                request.prompt_tokens = self.encode_text_completion(
+                request.prompt_tokens = self.formatter.encode_text_completion(
                     request.prompt
                 )
             else:
@@ -234,11 +222,11 @@ class Llama:
                 == self.model_args.max_seq_len
             ):
                 if request.completion_type is CompletionType.CHAT_COMPLETION:
-                    request.output = self.decode_chat_completion(
+                    request.output = self.formatter.decode_chat_completion(
                         request.output_tokens, None
                     )
                 elif request.completion_type is CompletionType.TEXT_COMPLETION:
-                    request.output = self.decode_text_completion(
+                    request.output = self.formatter.decode_text_completion(
                         request.output_tokens, None
                     )
 
@@ -247,43 +235,6 @@ class Llama:
             # Generation needs to continue so set stage to DECODE.
             else:
                 request.stage = RequestStage.DECODE
-
-    def encode_text_completion(self, prompt: str):
-        return self.tokenizer.encode(prompt, bos=True, eos=False)
-
-    def decode_text_completion(
-        self, tokens: torch.Tensor, token_logprobs: torch.Tensor
-    ):
-        if self.glob_params.logprobs:
-            return {
-                "generation": self.tokenizer.decode(tokens),
-                "tokens": [self.tokenizer.decode([x]) for x in tokens],
-                "logprobs": token_logprobs,
-            }
-        return {"generation": self.tokenizer.decode(tokens)}
-
-    def encode_chat_completion(self, dialog: Dialog):
-        return self.formatter.encode_dialog_prompt(dialog)
-
-    def decode_chat_completion(
-        self, tokens: torch.Tensor, token_logprobs: torch.Tensor
-    ):
-        if self.glob_params.logprobs:
-            return {
-                "generation": {
-                    "role": "assistant",
-                    "content": self.tokenizer.decode(tokens),
-                },
-                "tokens": [self.tokenizer.decode([x]) for x in tokens],
-                "logprobs": token_logprobs,
-            }
-
-        return {
-            "generation": {
-                "role": "assistant",
-                "content": self.tokenizer.decode(tokens),
-            },
-        }
 
 
 @torch.inference_mode()

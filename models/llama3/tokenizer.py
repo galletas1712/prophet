@@ -6,6 +6,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import (
     AbstractSet,
+    Optional,
     cast,
     Collection,
     Dict,
@@ -17,6 +18,7 @@ from typing import (
     Union,
 )
 
+import torch
 import tiktoken
 from tiktoken.load import load_tiktoken_bpe
 
@@ -199,11 +201,11 @@ class Tokenizer:
         yield s[slice_start:]
 
 
-class ChatFormat:
+class LlamaFormatter:
     def __init__(self, tokenizer: Tokenizer):
         self.tokenizer = tokenizer
 
-    def encode_header(self, message: Message) -> List[int]:
+    def _encode_header(self, message: Message) -> List[int]:
         tokens = []
         tokens.append(self.tokenizer.special_tokens["<|start_header_id|>"])
         tokens.extend(self.tokenizer.encode(message["role"], bos=False, eos=False))
@@ -211,19 +213,74 @@ class ChatFormat:
         tokens.extend(self.tokenizer.encode("\n\n", bos=False, eos=False))
         return tokens
 
-    def encode_message(self, message: Message) -> List[int]:
-        tokens = self.encode_header(message)
+    def _encode_message(self, message: Message) -> List[int]:
+        tokens = self._encode_header(message)
         tokens.extend(
             self.tokenizer.encode(message["content"].strip(), bos=False, eos=False)
         )
         tokens.append(self.tokenizer.special_tokens["<|eot_id|>"])
         return tokens
 
-    def encode_dialog_prompt(self, dialog: Dialog) -> List[int]:
+    def _encode_dialog_prompt(self, dialog: Dialog) -> List[int]:
         tokens = []
         tokens.append(self.tokenizer.special_tokens["<|begin_of_text|>"])
+        if len(dialog) == 0:
+            return None
         for message in dialog:
-            tokens.extend(self.encode_message(message))
+            tokens.extend(self._encode_message(message))
         # Add the start of an assistant message for the model to complete.
-        tokens.extend(self.encode_header({"role": "assistant", "content": ""}))
+        tokens.extend(self._encode_header({"role": "assistant", "content": ""}))
         return tokens
+
+    def encode_text_completion(self, prompt: str):
+        return self.tokenizer.encode(prompt, bos=True, eos=False)
+
+    def decode_text_completion(
+        self, tokens: torch.Tensor, token_logprobs: Optional[torch.Tensor]
+    ):
+        if token_logprobs is not None:
+            return {
+                "generation": self.tokenizer.decode(tokens),
+                "tokens": [self.tokenizer.decode([x]) for x in tokens],
+                "logprobs": token_logprobs,
+            }
+        return {"generation": self.tokenizer.decode(tokens)}
+
+    def encode_chat_completion(self, dialog: Dialog):
+        return self._encode_dialog_prompt(dialog)
+
+    def decode_chat_completion(
+        self, tokens: torch.Tensor, token_logprobs: Optional[torch.Tensor],
+    ):
+        if token_logprobs is not None:
+            return {
+                "generation": {
+                    "role": "assistant",
+                    "content": self.tokenizer.decode(tokens),
+                },
+                "tokens": [self.tokenizer.decode([x]) for x in tokens],
+                "logprobs": token_logprobs,
+            }
+
+        return {
+            "generation": {
+                "role": "assistant",
+                "content": self.tokenizer.decode(tokens),
+            },
+        }
+
+    # NOTE: only for benchmarking purposes
+    def get_max_dialog_len(self, dialog: Dialog, max_prompt_len: int):
+        num_tokens = len(self._encode_header({"role": "assistant", "content": ""})) + 1
+        if num_tokens > max_prompt_len:
+            return 0
+        
+        result = 0
+        for i, message in enumerate(dialog):
+            encoded_message = self._encode_message(message)
+            if num_tokens + len(encoded_message) > max_prompt_len:
+                break
+            num_tokens += len(encoded_message)
+            result = i + 1
+        
+        return result
