@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import json
 import time
 from pathlib import Path
-from typing import List, TypedDict
+from typing import List
 
 import torch
 
@@ -22,7 +22,6 @@ from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 
 @dataclass
 class GlobalGenerationParams:
-    max_gen_len: int
     temperature: float
     top_p: float
     logprobs: bool
@@ -217,7 +216,7 @@ class Llama:
             # to DONE and decodes request output tokens.
             if (
                 curr_next_token in self.tokenizer.stop_tokens
-                or len(request.output_tokens) == self.glob_params.max_gen_len
+                or len(request.output_tokens) == request.max_gen_len
                 or len(request.output_tokens) + len(request.prompt_tokens)
                 == self.model_args.max_seq_len
             ):

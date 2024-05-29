@@ -1,7 +1,7 @@
 import json
 import time
 
-import numpy
+import numpy as np
 
 from entrypoints.api import CompletionType, Request
 from models.llama3.tokenizer import Tokenizer, LlamaFormatter
@@ -52,17 +52,21 @@ def preprocess_shareGPT_dialogs(corpus, max_tokens):
 def request_generator(request_queue, num_termination_requests):
     print("Starting request generator...")
     shareGPTJSON = read_shareGPTJSON()
-    dialogs = preprocess_shareGPT_dialogs(read_shareGPTJSON(), 300)
+    dialogs = preprocess_shareGPT_dialogs(shareGPTJSON, 300)
 
     num_secs = 180
     arrivals_per_sec = 0.5
 
     for _ in range(1, num_secs):
         time.sleep(1)
-        num_requests = numpy.random.poisson(arrivals_per_sec)
+        num_requests = np.random.poisson(arrivals_per_sec)
         print("NUM_REQUESTS", num_requests)
         for _ in range(num_requests):
-            request = Request(next(dialogs), CompletionType.CHAT_COMPLETION)
+            request = Request(
+                next(dialogs),
+                CompletionType.CHAT_COMPLETION,
+                np.random.randint(5, 450),
+            )
             print(f"---- STARTED REQUEST {request.request_id, request.prompt[:20]} ----")
             request_queue.put(request)
     
