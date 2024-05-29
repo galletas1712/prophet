@@ -1,31 +1,12 @@
-import random
 import hydra
 import torch
 import torch.multiprocessing as mp
-import time
 
 from queue import Empty
 
-from entrypoints.api import CompletionType, Request, WorkerType
+from entrypoints.api import WorkerType
 from entrypoints.llm import LLM
-from test_data import TEST_PROMPTS, TEST_DIALOGS
-
-
-def sample_requests():
-    text_requests = [
-        Request(prompt, CompletionType.TEXT_COMPLETION)
-        for prompt in TEST_PROMPTS
-    ]
-
-    chat_requests = [
-        Request(dialog, CompletionType.CHAT_COMPLETION)
-        for dialog in TEST_DIALOGS
-    ]
-
-    requests = text_requests + chat_requests
-    random.shuffle(requests)
-
-    return requests
+from shareGPT import request_generator
 
 
 def prefill_worker(
@@ -50,6 +31,7 @@ def prefill_worker(
                 request = input_queue.get_nowait()
                 # Terminate on None
                 if request is None:
+                    output_queue.put(None)
                     return
                 llm.add_request(request)
                 num_pending_batching += 1
@@ -88,6 +70,7 @@ def decode_worker(
             request = input_queue.get_nowait()
             # Terminate on None
             if request is None:
+                output_queue.put(None)
                 return
             # First token (from prefill)
             request.benchmark_metrics.received_token()
@@ -168,27 +151,32 @@ def spawn_workers(config):
 
     model_load_barrier.wait()
 
-    # Send requests to workers.
-    requests = sample_requests()
-    for request in requests:
-        print(f"---- STARTED REQUEST {request.request_id, request.prompt[:20]} ----")
-        prefill_queue.put(request)
-    
-    for _ in range(len(requests)):
-        request = result_queue.get()
-        
-        request.benchmark_metrics.finished_request()
+    # Start request generator after we start prefill and decode processes
+    request_generator_process = mp.Process(
+        target=request_generator,
+        args=(prefill_queue,
+                config.coordinator.num_prefill_workers
+        )
+    )
+    processes.append(request_generator_process)
+    request_generator_process.start()
 
-        print(f"---- COMPLETED REQUEST {request.request_id} ----")
-        print(request.output)
-        print(request.benchmark_metrics)
-        print()
-
-    # Send terminate signal.
-    for _ in range(config.coordinator.num_prefill_workers):
-        prefill_queue.put(None)
-    for _ in range(config.coordinator.num_decode_workers):
-        decode_queue.put(None)
+    # Main process waits for outputs to complete
+    while True:
+        try:
+            request = result_queue.get_nowait()
+            # Terminate on None
+            if request is None:
+                break
+            # First token (from prefill)
+            request.benchmark_metrics.finished_request()
+            print(f"---- COMPLETED REQUEST {request.request_id} ----")
+            print(request.output)
+            print(request.benchmark_metrics)
+            print()
+        except Empty:
+            # OK if no new requests, continue decoding old requests
+            pass
 
     for p in processes:
         p.join()
