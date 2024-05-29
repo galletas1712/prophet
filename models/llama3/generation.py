@@ -12,10 +12,9 @@ import torch
 from entrypoints.api import (
     Request,
     RequestStage,
-    PrefillDataBatch,
-    DecodeDataBatch,
     CompletionType,
 )
+from entrypoints.databatch import PrefillDataBatch, DecodeDataBatch
 from models.llama3.model import ModelArgs, Transformer
 from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 

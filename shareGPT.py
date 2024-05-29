@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 
 import numpy as np
@@ -7,7 +8,8 @@ from entrypoints.api import CompletionType, Request
 from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 
 shareGPTPath = '/home/ubuntu/shareGPT.json'
-tokenizer = Tokenizer('/home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model')
+tokenizer = Tokenizer(
+    '/home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model')
 formatter = LlamaFormatter(tokenizer)
 
 
@@ -43,14 +45,17 @@ def preprocess_shareGPT_dialogs(corpus, max_tokens):
     return filter(
         lambda x: len(x) > 0,
         map(
-            lambda convo: preprocess_shareGPT_dialog(convo['conversations'], max_tokens),
+            lambda convo: preprocess_shareGPT_dialog(
+                convo['conversations'], max_tokens),
             corpus
         )
     )
 
 
 def request_generator(request_queue, num_termination_requests):
-    print("Starting request generator...")
+    logger = logging.getLogger("shareGPT.request_generator")
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Starting request generator...")
     shareGPTJSON = read_shareGPTJSON()
     dialogs = preprocess_shareGPT_dialogs(shareGPTJSON, 300)
 
@@ -60,15 +65,16 @@ def request_generator(request_queue, num_termination_requests):
     for _ in range(1, num_secs):
         time.sleep(1)
         num_requests = np.random.poisson(arrivals_per_sec)
-        print("NUM_REQUESTS", num_requests)
+        logger.debug(f"Current timestep requests: {num_requests}")
         for _ in range(num_requests):
             request = Request(
                 next(dialogs),
                 CompletionType.CHAT_COMPLETION,
                 np.random.randint(5, 450),
             )
-            print(f"---- STARTED REQUEST {request.request_id} max_gen_len {request.max_gen_len}: {str(request.prompt)[:20]}... ----")
+            logger.info(f"START {request.request_id} prompt_len {len(
+                formatter.encode_chat_completion(request.prompt))} max_gen_len {request.max_gen_len}")
             request_queue.put(request)
-    
+
     for _ in range(num_termination_requests):
         request_queue.put(None)

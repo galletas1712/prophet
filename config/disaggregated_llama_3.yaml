@@ -8,3 +8,4 @@ defaults:
   - override hydra/job_logging: disabled
 
 seed: 1
+benchmark_csv_path: /home/ubuntu/benchmark_results/both_fcfs.csv

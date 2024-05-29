@@ -1,8 +1,10 @@
-from entrypoints.api import Request, RequestStage, PrefillDataBatch, DecodeDataBatch, CompletionType, WorkerType
+from entrypoints.api import Request, RequestStage, WorkerType
+from entrypoints.databatch import PrefillDataBatch, DecodeDataBatch
 from schedulers import build_scheduler
 from models import build_model
 
 from typing import Any, List, Optional
+import logging
 import random
 import torch
 
@@ -13,7 +15,8 @@ class LLM:
         model_config,
         scheduler_config,
         seed: int,
-        worker_type: Optional[WorkerType] = None
+        logger: logging.Logger,
+        worker_type: Optional[WorkerType] = None, # NOTE: None corresponds to both
     ) -> None:
         random.seed(seed)
         torch.manual_seed(seed)
@@ -25,6 +28,7 @@ class LLM:
         self.scheduler = build_scheduler(
             scheduler_config
         )
+        self.logger = logger
         if self.worker_type is not WorkerType.PREFILL:
             self.decode_batch = DecodeDataBatch(
                 model_config.max_batch_size,
@@ -69,7 +73,7 @@ class LLM:
         # Allocate free decode batch slots for new requests that just finished prefilling
         new_requests = filter(lambda r: r.request_id not in requests_already_in, request_batch)
         for free_slot_idx, new_request in zip(free_slots, new_requests):
-            print("Filling slot", free_slot_idx, "with request", new_request.request_id, new_request.prompt[:15], "prompt len", len(new_request.prompt))
+            self.logger.debug(f"Filling slot {free_slot_idx} with request {new_request.request_id}")
             self.decode_batch.fill_slot(free_slot_idx, new_request)
 
         self.model.step_decode(self.decode_batch)
