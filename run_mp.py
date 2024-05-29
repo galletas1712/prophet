@@ -161,6 +161,10 @@ def spawn_workers(config):
     processes.append(request_generator_process)
     request_generator_process.start()
 
+    f = open('benchmark_results.csv', 'w')
+    f.write('JCT,TTFT,TPOT,TTFPT,TPODT\n')
+    f.close()
+
     # Main process waits for outputs to complete
     while True:
         try:
@@ -170,6 +174,12 @@ def spawn_workers(config):
                 break
             # First token (from prefill)
             request.benchmark_metrics.finished_request()
+
+            # Write benchmark results to file
+            f = open('benchmark_results.csv', 'a')
+            f.write(request.benchmark_metrics.to_csv_row())
+            f.close()
+
             print(f"---- COMPLETED REQUEST {request.request_id} ----")
             print(request.output)
             print(request.benchmark_metrics)

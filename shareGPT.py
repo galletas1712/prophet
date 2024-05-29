@@ -67,7 +67,7 @@ def request_generator(request_queue, num_termination_requests):
                 CompletionType.CHAT_COMPLETION,
                 np.random.randint(5, 450),
             )
-            print(f"---- STARTED REQUEST {request.request_id, request.prompt[:20]} ----")
+            print(f"---- STARTED REQUEST {request.request_id} max_gen_len {request.max_gen_len}: {str(request.prompt)[:20]}... ----")
             request_queue.put(request)
     
     for _ in range(num_termination_requests):

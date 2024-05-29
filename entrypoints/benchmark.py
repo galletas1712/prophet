@@ -30,6 +30,9 @@ class BenchmarkMetrics:
 
         self.request_finished = True
 
-    def __repr__(self):
+    def __str__(self):
         assert self.request_finished
         return f"JCT: {self.JCT}, TTFT: {self.TTFT}, TPOT: {self.TPOT}, TTFPT: {self.TTFPT}, TPODT: {self.TPODT}"
+    
+    def to_csv_row(self):
+        return ','.join([self.JCT, self.TTFT, self.TPOT, self.TTFPT, self.TPODT]) + '\n'
