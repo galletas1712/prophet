@@ -35,7 +35,7 @@ class RequestBenchmarkMetrics:
 
     def __str__(self):
         assert self.request_finished
-        return f"JCT: {self.JCT}, TTFT: {self.TTFT}, TPOT: {self.TPOT}, TTFPT: {self.TTFPT}, TPODT: {self.TPODT}"
+        return f"JCT: {self.JCT:.3f}, TTFT: {self.TTFT:.3f}, TPOT: {self.TPOT:.3f}, TTFPT: {self.TTFPT:.3f}, TPODT: {self.TPODT:.3f}"
     
     def to_csv_row(self):
         assert self.request_finished
