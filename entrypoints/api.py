@@ -26,7 +26,7 @@ class RequestStage(Enum):
 class Request:
     prompt: str | Any
     completion_type: CompletionType
-    max_gen_len: int
+    max_gen_len: int = 512
 
     request_id: uuid.UUID = field(default_factory=uuid.uuid4)
     idx_in_data_batch: Optional[int] = None

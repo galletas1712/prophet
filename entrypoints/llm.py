@@ -73,7 +73,7 @@ class LLM:
         # Allocate free decode batch slots for new requests that just finished prefilling
         new_requests = filter(lambda r: r.request_id not in requests_already_in, request_batch)
         for free_slot_idx, new_request in zip(free_slots, new_requests):
-            self.logger.debug(f"Filling slot {free_slot_idx} with request {new_request.request_id}")
+            # self.logger.debug(f"Filling slot {free_slot_idx} with request {new_request.request_id}")
             self.decode_batch.fill_slot(free_slot_idx, new_request)
 
         self.model.step_decode(self.decode_batch)
