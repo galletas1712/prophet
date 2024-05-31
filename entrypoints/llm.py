@@ -70,8 +70,8 @@ class LLM:
         # print("Requests already in:", requests_already_in)
 
         # Allocate free decode batch slots for new requests that just finished prefilling
-        new_requests = filter(
-            lambda r: r.request_id not in requests_already_in, request_batch)
+        new_requests = list(filter(
+            lambda r: r.request_id not in requests_already_in, request_batch))
 
         # Preempt slots
         occupied_slots = self.decode_batch.get_occupied_slots()
@@ -95,7 +95,7 @@ class LLM:
         for slot_idx, slot_request in enumerate(self.decode_batch.requests):
             if slot_request is not None and slot_request.stage is RequestStage.DONE:
                 # NOTE: Important otherwise we get memory leak
-                self.slot_request.free_cache()
+                slot_request.free_cache()
 
                 # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
                 self.scheduler.remove_request(slot_request.request_id)
