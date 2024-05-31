@@ -162,10 +162,6 @@ class Decoder:
         # # TODO: make this not block
         # asyncio.gather(self.prefill_actor.send_kv(request), col.get())
 
-        # Move from CPU back to CUDA
-        request.cache_k = request.cache_k.cuda()
-        request.cache_v = request.cache_v.cuda()
-
         return request
 
     async def run(self):

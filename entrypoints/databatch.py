@@ -383,19 +383,21 @@ class DecodeDataBatch:
         # Only token we process
         self.start_pos[idx] = prompt_len + output_len - 1
 
-        # Copy KV cache over
-        self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.clone()
-        self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.clone()
-
-        # NOTE: Important to delete here, or else we get a memory leak
-        del request.cache_k
-        del request.cache_v
-        gc.collect()
-        torch.cuda.empty_cache()
+        # Move to CUDA if restoring from preemption or not using NCCL.
+        # Otherwise should already be in CUDA.
+        self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.cuda()
+        self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.cuda()
 
         self.free_slots.discard(idx)
         self.occupied_slots.add(idx)
-
+    
+    def preempt_slot(self, idx: int, request: Request):
+        old_request = self.requests[idx]
+        old_request.cache_k = old_request.cache_k.cpu()
+        old_request.cache_v = old_request.cache_v.cpu()
+        self.clear_slot(idx)
+        self.fill_slot(idx, request)
+    
     def clear_slot(self, idx: int):
         self.requests[idx].idx_in_batch = None
         self.requests[idx] = None
@@ -408,10 +410,13 @@ class DecodeDataBatch:
 
     def get_free_slots(self):
         return list(self.free_slots)
+    
+    def get_occupied_slots(self):
+        return list(self.occupied_slots)
 
     def get_requests_already_in(self):
         return [self.requests[idx].request_id for idx in self.occupied_slots]
-
+    
     # For passing KV cache only up to the max slot in the current batch to the forward pass
     def get_forward_batch_dim(self):
         return max(self.occupied_slots) + 1

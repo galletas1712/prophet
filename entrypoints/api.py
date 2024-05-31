@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, List, Any
 
+import gc
 import torch
 import uuid
 
@@ -46,3 +47,10 @@ class Request:
     # For benchmarking
     benchmark_metrics: RequestBenchmarkMetrics = field(default_factory=RequestBenchmarkMetrics)
 
+    def free_cache(self):
+        del self.cache_k
+        del self.cache_v
+
+        # NOTE: Just for profiling purposes. Remove in production
+        gc.collect()
+        torch.cuda.empty_cache()
