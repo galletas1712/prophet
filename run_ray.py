@@ -181,9 +181,16 @@ class Decoder:
             for request in requests_to_add:
                 print(f"Decoder received request {request.request_id}")
                 self.llm.add_request(request)
+                # First token from prefill
+                request.benchmark_metrics.received_token()
 
             # Do work
             done_requests, request_batch = self.llm.step_decode()
+
+            # Update benchmarks
+            torch.cuda.synchronize()
+            for request in request_batch:
+                request.benchmark_metrics.received_token()
 
             # TODO: debug level
             # if len(request_batch) > 0:
@@ -197,14 +204,29 @@ class Decoder:
 
 @ray.remote(num_cpus=2)
 class OutputConsumer:
-    def __init__(self, input_queue: Queue):
+    def __init__(self, config, input_queue: Queue):
+        self.config = config
         self.input_queue = input_queue
+
+        if self.config.benchmark_csv_path is not None:
+            f = open(self.config.benchmark_csv_path, 'w')
+            f.write('gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
+            f.close()
 
     def run(self):
         while True:
             request = self.input_queue.get(block=True)
             print(f"OutputConsumer received request {request.request_id}")
             print(f"Output: {request.output}")
+
+            # Write benchmarks
+            request.benchmark_metrics.finished_request()
+
+            # Write benchmark results to file
+            if self.config.benchmark_csv_path is not None:
+                f = open(self.config.benchmark_csv_path, 'a')
+                f.write(request.benchmark_metrics.to_csv_row())
+                f.close()
 
 
 @hydra.main(
@@ -252,7 +274,7 @@ def driver(config):
         )
         for i in range(config.coordinator.num_decode_workers)
     ]
-    output_consumer = OutputConsumer.remote(result_queue)
+    output_consumer = OutputConsumer.remote(config, result_queue)
 
     # Wait for all actors to initialize
     ray.get([

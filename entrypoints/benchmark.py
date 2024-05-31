@@ -24,11 +24,11 @@ class RequestBenchmarkMetrics:
         # Time to first *decode* (or prefill if no decodes) token
         self.TTFT = (self.token_times[0] + (self.token_times[1] if len(self.token_times) > 1 else 0)).item()
         # Time per output token (second decode token onwards)
-        self.TPOT = self.token_times[2:].mean().item() if len(self.token_times) > 2 else None
+        self.TPOT = self.token_times[2:].mean().item() if len(self.token_times) > 2 else -1
         # Time to first *prefill* token
         self.TTFPT = self.token_times[0].item()
         # Time per output token (first decode token onwards)
-        self.TPODT = self.token_times[1:].mean().item() if len(self.token_times) > 1 else None
+        self.TPODT = self.token_times[1:].mean().item() if len(self.token_times) > 1 else -1
 
         self.stats_trunc = list(map("{:.3f}".format, [self.JCT, self.TTFT, self.TPOT, self.TTFPT, self.TPODT]))
         self.request_finished = True
