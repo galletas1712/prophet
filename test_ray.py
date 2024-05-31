@@ -4,10 +4,8 @@ import ray
 
 import numpy as np
 
-from entrypoints.api import CompletionType, Request
-from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 from ray.util.queue import Queue, Empty
-from shareGPT_ray import ShareGPTRequestGenerator
+from ray_workers.shareGPT import ShareGPTRequestGenerator
 
 shareGPTPath = '/Users/schwinn/shareGPT.json'
 tokenizer_path = '/Users/schwinn/tokenizer.model'
