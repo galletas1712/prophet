@@ -62,11 +62,12 @@ class Prefiller:
         self.input_queue = input_queue
         self.output_queue = output_queue
 
+    def load_llm(self):
         print(f"Prefiller(rank={self.rank}) initializing LLM...")
         self.llm = LLM(
-            config.model,
-            config.prefill_scheduler,
-            config.seed,
+            self.config.model,
+            self.config.prefill_scheduler,
+            self.config.seed,
             worker_type=WorkerType.PREFILL,
         )
         print(f"Prefiller(rank={self.rank}) done initializing LLM!")
@@ -136,12 +137,13 @@ class Decoder:
         self.config = config
         self.input_queue = input_queue
         self.output_queue = output_queue
-
+    
+    def load_llm(self):
         print(f"Decoder(rank={self.rank}) initializing LLM...")
         self.llm = LLM(
-            config.model,
-            config.prefill_scheduler,
-            config.seed,
+            self.config.model,
+            self.config.prefill_scheduler,
+            self.config.seed,
             worker_type=WorkerType.DECODE,
         )
         print(f"Decoder(rank={self.rank}) done initializing LLM!")
@@ -251,6 +253,13 @@ def driver(config):
         for i in range(config.coordinator.num_decode_workers)
     ]
     output_consumer = OutputConsumer.remote(result_queue)
+
+    # Wait for all actors to initialize
+    ray.get([
+        request_generator.load_corpus.remote(),
+        *[prefiller.load_llm.remote() for prefiller in prefillers],
+        *[decoder.load_llm.remote() for decoder in decoders],
+    ])
 
     # Wait for all actors to terminate
     ray.get(

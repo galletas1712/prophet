@@ -27,7 +27,7 @@ class ShareGPTCorpus:
         self,
         corpus_path: str,
         tokenizer_path: str,
-        max_prompt_tokens: int = 300,
+        max_prompt_tokens: int,
     ):
         # Read corpus
         f = open(corpus_path)
@@ -67,16 +67,25 @@ class ShareGPTRequestGenerator:
             corpus_path: str,
             tokenizer_path: str,
             request_queue: Queue,
+            max_prompt_tokens: int = 300,
             num_secs: int = 20,
             arrivals_per_sec: int = 10,
             max_gen_len_interval: tuple[int, int] = (5, 450),
         ):
+        self.corpus_path = corpus_path
+        self.tokenizer_path = tokenizer_path
         self.request_queue = request_queue
-        self.corpus = ShareGPTCorpus(corpus_path, tokenizer_path)
 
+        # Generation parameters
+        self.max_prompt_tokens = max_prompt_tokens
         self.num_secs = num_secs
         self.arrivals_per_sec = arrivals_per_sec
         self.max_gen_len_interval = max_gen_len_interval
+    
+    def load_corpus(self):
+        print("Loading shareGPT corpus...")
+        self.corpus = ShareGPTCorpus(self.corpus_path, self.tokenizer_path, self.max_prompt_tokens)
+        print("Done loading shareGPT corpus!")
     
     async def run(self):
         print("Begin request generation")
