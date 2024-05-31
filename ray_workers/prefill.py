@@ -51,6 +51,9 @@ class Prefiller:
         self.input_queue = input_queue
         self.output_queue = output_queue
 
+        self.num_scheduler_slots = int(self.config.max_in_progress_factor *
+                                       self.config.prefill_scheduler.batch_size)
+
     def load_llm(self):
         print(f"Prefiller(rank={self.rank}) initializing LLM...")
         self.llm = LLM(
@@ -64,42 +67,36 @@ class Prefiller:
     def __repr__(self):
         return f"Prefiller(rank={self.rank})"
 
-    def get_next_batch_ref(self):
-        self.next_batch_ref = [
-            self.input_queue.get_async(
-                block=True,
-                timeout=self.config.coordinator.dequeue_timeout
-            )
-            for _ in range(self.config.prefill_scheduler.batch_size)
-        ]
+    async def dequeue_request(self):
+        # Wait for a very small amount of time, otherwise move on
+        request = await self.input_queue.get_async(
+            block=True,
+            timeout=self.config.coordinator.dequeue_timeout
+        )
+        return request
 
     async def run(self):
         print(f"Starting on GPU {ray.get_gpu_ids()}")
-        self.get_next_batch_ref()
-        requests_to_process = []
         while True:
-            dequeue_results = await asyncio.gather(*self.next_batch_ref, return_exceptions=True)
-            requests_to_process = list(
-                filter(lambda x: not isinstance(x, Empty), dequeue_results))
-            self.get_next_batch_ref()
-
-            # Do work
-            for request in requests_to_process:
+            num_free_slots = self.num_scheduler_slots - self.llm.num_requests_in_progress
+            dequeue_cors = [self.dequeue_request()
+                            for _ in range(num_free_slots)]
+            dequeue_cors_results = await asyncio.gather(*dequeue_cors, return_exceptions=True)
+            requests_to_add = filter(lambda x: not isinstance(
+                x, Empty), dequeue_cors_results)
+            for request in requests_to_add:
+                print(f"Prefiller received request {request.request_id} pending scheduling...")
                 self.llm.add_request(request)
 
-            if len(requests_to_process) > 0:
-                print(
-                    f"Prefiller processing batch of {len(requests_to_process)} requests")
-                print(
-                    f"Prefiller requests: {[request.request_id for request in requests_to_process]}")
-
             prefill_data_batch = self.llm.step_prefill()
-
             if prefill_data_batch is None:
                 continue
 
+            for request in prefill_data_batch.requests:
+                print(f"Prefilled {request.request_id}")
+
             # Add to pending queue
-            for request in requests_to_process:
+            for request in prefill_data_batch.requests:
                 # NOTE: Important to block until queue is free
                 request.cache_k = request.cache_k.detach().cpu()
                 request.cache_v = request.cache_v.detach().cpu()
