@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, List
 
+import gc
 import torch
 
 from sortedcontainers import SortedSet
@@ -385,6 +386,12 @@ class DecodeDataBatch:
         # Copy KV cache over
         self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.clone()
         self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.clone()
+
+        # NOTE: Important to delete here, or else we get a memory leak
+        del request.cache_k
+        del request.cache_v
+        gc.collect()
+        torch.cuda.empty_cache()
 
         self.free_slots.discard(idx)
         self.occupied_slots.add(idx)

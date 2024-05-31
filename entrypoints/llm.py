@@ -3,8 +3,7 @@ from entrypoints.databatch import PrefillDataBatch, DecodeDataBatch
 from schedulers import build_scheduler
 from models import build_model
 
-from typing import Any, List, Optional
-import logging
+from typing import Any, Optional
 import random
 import torch
 
@@ -15,7 +14,6 @@ class LLM:
         model_config,
         scheduler_config,
         seed: int,
-        logger: logging.Logger,
         worker_type: Optional[WorkerType] = None, # NOTE: None corresponds to both
     ) -> None:
         random.seed(seed)
@@ -28,10 +26,9 @@ class LLM:
         self.scheduler = build_scheduler(
             scheduler_config
         )
-        self.logger = logger
         if self.worker_type is not WorkerType.PREFILL:
             self.decode_batch = DecodeDataBatch(
-                model_config.max_batch_size,
+                scheduler_config.batch_size,
                 model_config.max_seq_len,
                 self.model.model_args.n_layers,
                 self.model.model_args.dim,
@@ -73,7 +70,7 @@ class LLM:
         # Allocate free decode batch slots for new requests that just finished prefilling
         new_requests = filter(lambda r: r.request_id not in requests_already_in, request_batch)
         for free_slot_idx, new_request in zip(free_slots, new_requests):
-            self.logger.debug(f"Filling slot {free_slot_idx} with request {new_request.request_id}")
+            print(f"Filling slot {free_slot_idx} with request {new_request.request_id}")
             self.decode_batch.fill_slot(free_slot_idx, new_request)
 
         self.model.step_decode(self.decode_batch)
@@ -84,11 +81,12 @@ class LLM:
                 # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
                 self.scheduler.remove_request(slot_request.request_id)
                 self.decode_batch.clear_slot(slot_idx)
-                del slot_request.cache_k
-                del slot_request.cache_v
                 done_requests.append(slot_request)
 
         return done_requests, request_batch
 
     def add_request(self, request: Request):
         self.scheduler.add_request(request)
+    
+    def get_num_free_decoder_slots(self):
+        return len(self.decode_batch.free_slots)

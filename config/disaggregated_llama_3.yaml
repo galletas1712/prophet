@@ -1,6 +1,6 @@
 defaults:
   - model: llama_3
-  - coordinator: mp_coordinator
+  - coordinator: ray_coordinator
   - prefill_scheduler: ../scheduler/fcfs
   - decode_scheduler: ../scheduler/fcfs
   - _self_
