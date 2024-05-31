@@ -376,9 +376,9 @@ class DecodeDataBatch:
         # Output_tokens should only be one element from prefill
         prompt_len = len(request.prompt_tokens)
         output_len = len(request.output_tokens)
-        assert output_len == 1
         self.input_tokens[idx] = torch.tensor(
-            request.output_tokens, dtype=torch.long, device="cuda")
+            request.output_tokens[-1:], dtype=torch.long, device="cuda")
+        assert self.input_tokens[idx].shape[0] == 1
 
         # Only token we process
         self.start_pos[idx] = prompt_len + output_len - 1
@@ -390,14 +390,14 @@ class DecodeDataBatch:
 
         self.free_slots.discard(idx)
         self.occupied_slots.add(idx)
-    
+
     def preempt_slot(self, idx: int, request: Request):
         old_request = self.requests[idx]
-        old_request.cache_k = old_request.cache_k.cpu()
-        old_request.cache_v = old_request.cache_v.cpu()
+        old_request.cache_k = self.cache_k[idx, :self.start_pos[idx] + 1].cpu()
+        old_request.cache_v = self.cache_v[idx, :self.start_pos[idx] + 1].cpu()
         self.clear_slot(idx)
         self.fill_slot(idx, request)
-    
+
     def clear_slot(self, idx: int):
         self.requests[idx].idx_in_batch = None
         self.requests[idx] = None
@@ -410,13 +410,13 @@ class DecodeDataBatch:
 
     def get_free_slots(self):
         return list(self.free_slots)
-    
+
     def get_occupied_slots(self):
         return list(self.occupied_slots)
 
     def get_requests_already_in(self):
         return [self.requests[idx].request_id for idx in self.occupied_slots]
-    
+
     # For passing KV cache only up to the max slot in the current batch to the forward pass
     def get_forward_batch_dim(self):
         return max(self.occupied_slots) + 1

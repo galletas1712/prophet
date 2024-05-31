@@ -36,6 +36,8 @@ class LLM:
                 self.model.tokenizer.pad_id
             )
 
+        self.num_requests_in_progress = 0
+
     def step_prefill(self) -> Optional[PrefillDataBatch]:
         # NOTE: sometimes we might call step_prefill with nothing in the queue
         # Returns a PrefillDataBatch if there were requests to prefill, None otherwise
@@ -47,6 +49,7 @@ class LLM:
             return None
 
         prefill_batch_state = self.model.step_prefill(request_batch)
+        self.num_requests_in_progress -= len(request_batch)
         return prefill_batch_state
 
     def step_decode(self) -> dict[str, Any]:
@@ -66,14 +69,11 @@ class LLM:
         if len(request_batch) == 0 and len(requests_already_in) == 0:
             return {}, []
 
-        # print("Scheduled: ", [r.request_id for r in request_batch], "Replaceable slots: ", free_slots)
-        # print("Requests already in:", requests_already_in)
-
         # Allocate free decode batch slots for new requests that just finished prefilling
         new_requests = list(filter(
             lambda r: r.request_id not in requests_already_in, request_batch))
 
-        # Preempt slots
+        # Preempt slots if we have to
         occupied_slots = self.decode_batch.get_occupied_slots()
         requests_to_preempt_with = new_requests[len(free_slots):]
         for occupied_slot_idx, new_request in zip(occupied_slots, requests_to_preempt_with):
@@ -91,6 +91,7 @@ class LLM:
 
         self.model.step_decode(self.decode_batch)
 
+        # Process all requests that are done
         done_requests = []
         for slot_idx, slot_request in enumerate(self.decode_batch.requests):
             if slot_request is not None and slot_request.stage is RequestStage.DONE:
@@ -99,6 +100,8 @@ class LLM:
 
                 # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
                 self.scheduler.remove_request(slot_request.request_id)
+                self.num_requests_in_progress -= 1
+
                 self.decode_batch.clear_slot(slot_idx)
                 done_requests.append(slot_request)
 
@@ -106,6 +109,7 @@ class LLM:
 
     def add_request(self, request: Request):
         self.scheduler.add_request(request)
+        self.num_requests_in_progress += 1
 
     def get_num_free_decoder_slots(self):
         return len(self.decode_batch.free_slots)

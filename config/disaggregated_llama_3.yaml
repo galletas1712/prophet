@@ -2,10 +2,11 @@ defaults:
   - model: llama_3
   - coordinator: ray_coordinator
   - prefill_scheduler: ../scheduler/fcfs
-  - decode_scheduler: ../scheduler/fcfs
+  - decode_scheduler: ../scheduler/random
   - _self_
   - override hydra/hydra_logging: disabled  
   - override hydra/job_logging: disabled
 
 seed: 1
 benchmark_csv_path: /home/ubuntu/benchmark_results/both_fcfs.csv
+max_in_progress_factor: 2

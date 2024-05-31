@@ -137,12 +137,15 @@ class Decoder:
         self.config = config
         self.input_queue = input_queue
         self.output_queue = output_queue
-    
+
+        self.num_scheduler_slots = int(self.config.max_in_progress_factor *
+                                       self.config.decode_scheduler.batch_size)
+
     def load_llm(self):
         print(f"Decoder(rank={self.rank}) initializing LLM...")
         self.llm = LLM(
             self.config.model,
-            self.config.prefill_scheduler,
+            self.config.decode_scheduler,
             self.config.seed,
             worker_type=WorkerType.DECODE,
         )
@@ -168,7 +171,17 @@ class Decoder:
         print(f"Starting on GPU {ray.get_gpu_ids()}")
         while True:
             # TODO: Pipeline! This blocks on I/O from prefill process right now
-            num_free_slots = self.llm.get_num_free_decoder_slots()
+
+            # NOTE: The factor k * scheduler.batch_size is the maximum number of requests that can be pending in the scheduler
+            # Note that this is NOT the max pending queue size.
+            # Pending queue size is just how big the prefill "write buffer" is.
+            # It prevents prefills from going to fast and overrunning the scheduler.
+            # On the other hand, the free slots here is how many requests we get to choose from in the scheduler.
+            # If k = 1, then all schedulers converge to FCFS!
+            # Total KV cache buffer needed is k * scheduler.batch_size * max_seq_len * dim * 2 * 4 bytes
+
+            num_free_slots = self.num_scheduler_slots - self.llm.num_requests_in_progress
+
             dequeue_cors = [self.dequeue_request()
                             for _ in range(num_free_slots)]
             dequeue_cors_results = await asyncio.gather(*dequeue_cors, return_exceptions=True)
@@ -187,10 +200,6 @@ class Decoder:
             torch.cuda.synchronize()
             for request in request_batch:
                 request.benchmark_metrics.received_token()
-
-            # TODO: debug level
-            # if len(request_batch) > 0:
-            #     print(f"Decoder processing batch of {len(request_batch)} requests")
 
             for request in done_requests:
                 # NOTE: Important to block until queue is free
@@ -213,7 +222,8 @@ class OutputConsumer:
         while True:
             request = self.input_queue.get(block=True)
             print(f"OutputConsumer received request {request.request_id}")
-            print(f"Output: {request.output}")
+            print(
+                f"Max Gen Len: {request.max_gen_len}, Output: {request.output}")
 
             # Write benchmarks
             request.benchmark_metrics.finished_request()
@@ -242,7 +252,7 @@ def driver(config):
 
     ray.init()
 
-    # Optimal queue lengths
+    # (Probably) optimal write buffer lengths?
     max_request_queue_size = config.coordinator.num_prefill_workers * \
         config.prefill_scheduler.batch_size
     max_pending_queue_size = config.coordinator.num_decode_workers * \
