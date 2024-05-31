@@ -383,8 +383,7 @@ class DecodeDataBatch:
         # Only token we process
         self.start_pos[idx] = prompt_len + output_len - 1
 
-        # Move to CUDA if restoring from preemption or not using NCCL.
-        # Otherwise should already be in CUDA.
+        # Can't hurt to make sure it's in CUDA.
         self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.cuda()
         self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.cuda()
 
@@ -393,8 +392,8 @@ class DecodeDataBatch:
 
     def preempt_slot(self, idx: int, request: Request):
         old_request = self.requests[idx]
-        old_request.cache_k = self.cache_k[idx, :self.start_pos[idx] + 1].cpu()
-        old_request.cache_v = self.cache_v[idx, :self.start_pos[idx] + 1].cpu()
+        old_request.cache_k = self.cache_k[idx, :self.start_pos[idx] + 1].clone()
+        old_request.cache_v = self.cache_v[idx, :self.start_pos[idx] + 1].clone()
         self.clear_slot(idx)
         self.fill_slot(idx, request)
 

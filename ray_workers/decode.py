@@ -52,9 +52,9 @@ class Decoder:
             timeout=self.config.coordinator.dequeue_timeout
         )
 
-        # # NOTE: right now idx_in_batch is still the same as prefill
-        # # TODO: make this not block
-        # asyncio.gather(self.prefill_actor.send_kv(request), col.get())
+        # Retrieve KV cache from main memory after deserialization
+        request.cache_k = request.cache_k.cuda()
+        request.cache_v = request.cache_v.cuda()
 
         return request
 
