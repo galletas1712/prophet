@@ -1,6 +1,4 @@
 import hydra
-from typing import List
-
 import torch
 
 from entrypoints.llm import LLM

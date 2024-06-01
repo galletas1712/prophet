@@ -20,8 +20,6 @@ class LLM:
         random.seed(seed)
         torch.manual_seed(seed)
 
-        assert scheduler_config.batch_size <= model_config.max_batch_size
-
         self.worker_type = worker_type
         self.model = build_model(model_config)
         self.scheduler = build_scheduler(

@@ -85,7 +85,7 @@ class Prefiller:
             requests_to_add = filter(lambda x: not isinstance(
                 x, Empty), dequeue_cors_results)
             for request in requests_to_add:
-                print(f"Prefiller received request {request.request_id} pending scheduling...")
+                print(f"Received request {request.request_id} pending scheduling...")
                 self.llm.add_request(request)
 
             prefill_data_batch = self.llm.step_prefill()

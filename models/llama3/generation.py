@@ -33,7 +33,6 @@ class Llama:
         ckpt_dir: str,
         tokenizer_path: str,
         max_seq_len: int,
-        max_batch_size: int,
         glob_params: GlobalGenerationParams,
     ) -> "Llama":
         """
@@ -43,7 +42,6 @@ class Llama:
             ckpt_dir (str): Path to the directory containing checkpoint files.
             tokenizer_path (str): Path to the tokenizer file.
             max_seq_len (int): Maximum sequence length for input text.
-            max_batch_size (int): Maximum batch size for inference.
             model_parallel_size (Optional[int], optional): Number of model parallel processes.
                 If not provided, it's determined from the environment. Defaults to None.
 
@@ -68,7 +66,6 @@ class Llama:
             params = json.loads(f.read())
             model_args: ModelArgs = ModelArgs(
                 max_seq_len=max_seq_len,
-                max_batch_size=max_batch_size,
                 **params,
             )
 

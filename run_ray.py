@@ -12,10 +12,6 @@ from ray_workers.prefill import Prefiller
 from ray_workers.decode import Decoder
 
 
-shareGPTPath = '/home/ubuntu/shareGPT.json'
-tokenizer_path = '/home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model'
-
-
 @ray.remote(num_cpus=2)
 class OutputConsumer:
     def __init__(self, config, input_queue: Queue):
@@ -72,7 +68,10 @@ def driver(config):
     result_queue = Queue()
 
     request_generator = ShareGPTRequestGenerator.remote(
-        shareGPTPath, tokenizer_path, request_queue)
+        config.request_generator_corpus_path,
+        config.model.tokenizer_path,
+        request_queue
+    )
     prefillers = [
         Prefiller.options(name=f"prefiller#{i}").remote(
             config,
