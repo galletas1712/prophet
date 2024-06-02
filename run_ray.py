@@ -58,12 +58,10 @@ def driver(config):
     ray.init()
 
     # (Probably) optimal write buffer lengths?
-    max_request_queue_size = config.coordinator.num_prefill_workers * \
-        config.prefill_scheduler.batch_size
     max_pending_queue_size = config.coordinator.num_decode_workers * \
         config.decode_scheduler.batch_size
 
-    request_queue = Queue(maxsize=max_request_queue_size)
+    request_queue = Queue()
     pending_queue = Queue(maxsize=max_pending_queue_size)
     result_queue = Queue()
 
