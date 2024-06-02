@@ -51,8 +51,8 @@ class Prefiller:
         self.input_queue = input_queue
         self.output_queue = output_queue
 
-        self.num_scheduler_slots = int(self.config.max_in_progress_factor *
-                                       self.config.prefill_scheduler.batch_size)
+        assert self.config.prefill_scheduler.max_requests_in_scheduler >= self.config.prefill_scheduler.batch_size
+        self.num_scheduler_slots = self.config.prefill_scheduler.max_requests_in_scheduler
 
     def load_llm(self):
         print(f"Prefiller(rank={self.rank}) initializing LLM...")

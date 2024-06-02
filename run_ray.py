@@ -1,27 +1,29 @@
+import os  # noqa
+os.environ['RAY_DEDUP_LOGS'] = '0'  # noqa
+os.environ['RAY_COLOR_PREFIX'] = '1'  # noqa
 # Somehow we need to do this before importing Ray for no log dedup
-import os
-os.environ['RAY_DEDUP_LOGS'] = '0'
-os.environ['RAY_COLOR_PREFIX'] = '1'
 
-import torch
-import hydra
-import ray
-from ray.util.queue import Queue
-from ray_workers.shareGPT import ShareGPTRequestGenerator
-from ray_workers.prefill import Prefiller
 from ray_workers.decode import Decoder
+from ray_workers.prefill import Prefiller
+from ray_workers.shareGPT import ShareGPTRequestGenerator
+from ray.util.queue import Queue
+import ray
+import hydra
+import torch
 
 
 @ray.remote(num_cpus=2)
 class OutputConsumer:
-    def __init__(self, config, input_queue: Queue):
+
+    def __init__(self, config, output_dir: str, input_queue: Queue):
         self.config = config
         self.input_queue = input_queue
+        self.benchmark_results_file = os.path.join(
+            output_dir, 'benchmark_results.csv')
 
-        if self.config.benchmark_csv_path is not None:
-            f = open(self.config.benchmark_csv_path, 'w')
-            f.write('gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
-            f.close()
+        f = open(self.benchmark_results_file, 'w')
+        f.write('gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
+        f.close()
 
     def run(self):
         while True:
@@ -34,10 +36,9 @@ class OutputConsumer:
             request.benchmark_metrics.finished_request()
 
             # Write benchmark results to file
-            if self.config.benchmark_csv_path is not None:
-                f = open(self.config.benchmark_csv_path, 'a')
-                f.write(request.benchmark_metrics.to_csv_row())
-                f.close()
+            f = open(self.benchmark_results_file, 'a')
+            f.write(request.benchmark_metrics.to_csv_row())
+            f.close()
 
 
 @hydra.main(
@@ -57,9 +58,9 @@ def driver(config):
 
     ray.init()
 
-    # (Probably) optimal write buffer lengths?
-    max_pending_queue_size = config.coordinator.num_decode_workers * \
-        config.decode_scheduler.batch_size
+    # For each prefill and decode worker pair, we should have only one pending request
+    max_pending_queue_size = config.coordinator.num_prefill_workers * \
+        config.coordinator.num_decode_workers
 
     request_queue = Queue()
     pending_queue = Queue(maxsize=max_pending_queue_size)
@@ -86,7 +87,11 @@ def driver(config):
         )
         for i in range(config.coordinator.num_decode_workers)
     ]
-    output_consumer = OutputConsumer.remote(config, result_queue)
+    output_consumer = OutputConsumer.remote(
+        config,
+        hydra.core.hydra_config.HydraConfig.get().runtime.output_dir,
+        result_queue,
+    )
 
     # Wait for all actors to initialize
     ray.get([

@@ -1,13 +1,11 @@
 defaults:
   - model: llama_3
   - coordinator: ray_coordinator
-  - prefill_scheduler: ../scheduler/fcfs
-  - decode_scheduler: ../scheduler/fcfs
-  - request_generator: ../request_generator/shareGPT_uniform_1_rps
+  - prefill_scheduler: fcfs
+  - decode_scheduler: fcfs
+  - request_generator: shareGPT_uniform_1_rps
   - _self_
   - override hydra/hydra_logging: disabled  
   - override hydra/job_logging: disabled
 
 seed: 1
-max_in_progress_factor: 2
-benchmark_csv_path: /home/ubuntu/benchmark_results/both_fcfs.csv

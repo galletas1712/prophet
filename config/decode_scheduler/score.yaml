@@ -1,7 +1,8 @@
 name: score
 
-batch_size: 4
+batch_size: 16
 min_batches_before_preemption: 4
 max_batches_before_promotion: 256
 scoring_method: "prefill_length"
 initial_score: 0
+max_requests_in_scheduler: 32

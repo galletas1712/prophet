@@ -89,8 +89,7 @@ class ShareGPTRequestGenerator:
                     np.random.randint(self.config.max_gen_len_low, self.config.max_gen_len_high)
                 )
 
-                # Put into random prefill queue. Block until queue is free
-                print(f"Waiting to add request {request.request_id} to request queue")
+                # Put into request queue. Block until queue is free
                 await self.request_queue.put_async(request)
 
                 print(f"Request {request.request_id} added to request queue")

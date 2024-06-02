@@ -1,0 +1,4 @@
+name: srpt
+
+batch_size: 16
+max_requests_in_scheduler: 32

@@ -20,17 +20,15 @@ class Decoder:
         self.input_queue = input_queue
         self.output_queue = output_queue
 
-        # NOTE: The max in progress factor k * scheduler.batch_size is the maximum number 
-        # of requests that can be pending in the scheduler at any time.
-        # Note that this is NOT the max pending queue size.
+        # NOTE: max_requests_in_scheduler is NOT the max pending queue size.
         # Pending queue size is just how big the prefill "write buffer" is.
         # It prevents prefills from going to fast and overrunning the scheduler.
         # On the other hand, the free slots here is how many requests we get to choose from in the scheduler.
         # If k = 1, then all schedulers converge to FCFS!
-        # Total KV cache buffer needed is k * scheduler.batch_size * max_seq_len * dim * 2 * 4 bytes
+        # Total KV cache buffer needed is max_requests_in_scheduler * max_seq_len * dim * 2 * 4 bytes
 
-        self.num_scheduler_slots = int(self.config.max_in_progress_factor *
-                                       self.config.decode_scheduler.batch_size)
+        assert self.config.decode_scheduler.max_requests_in_scheduler >= self.config.decode_scheduler.batch_size
+        self.num_scheduler_slots = self.config.decode_scheduler.max_requests_in_scheduler
 
     def load_llm(self):
         print(f"Decoder(rank={self.rank}) initializing LLM...")
