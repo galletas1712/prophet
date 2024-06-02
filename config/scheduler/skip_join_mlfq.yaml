@@ -1,6 +1,0 @@
-name: skip_join_mlfq
-
-batch_size: 2
-num_queues: 4
-queue_limits: [16, 32, 64, 128]
-starvation_limit: 256

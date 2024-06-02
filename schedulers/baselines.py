@@ -1,8 +1,12 @@
+from sortedcontainers import SortedKeyList
 from collections import OrderedDict, deque
+
+from omegaconf import OmegaConf
+
 from typing import List
 
 from entrypoints.api import Request, RequestStage, CompletionType
-from schedulers.utils import register_scheduler
+from schedulers.utils import register_scheduler, build_scheduler
 
 import random
 
@@ -36,6 +40,7 @@ class FCFS_Scheduler:
     def remove_request(self, finished_request_id):
         self.request_dict.pop(finished_request_id)
 
+
 @register_scheduler("random")
 class Random_Scheduler:
 
@@ -66,6 +71,7 @@ class Random_Scheduler:
 
     def remove_request(self, finished_request_id):
         self.request_dict.pop(finished_request_id)
+
 
 # TODO(cathy) change definition of promptlen for dialog completion
 @register_scheduler("srpt")
@@ -120,13 +126,11 @@ class PrefillLengthScorer:
         return len(request.prompt_tokens)
 
 
-@register_scheduler("skip_join_mlfq")
-class SkipJoinMLFQ_Scheduler:
+@register_scheduler("score")
+class ScoreScheduler:
     def __init__(
         self,
         batch_size,
-        num_queues=4,
-        queue_limits=[16, 32, 64, 128],
         min_batches_before_preemption=4,
         max_batches_before_promotion=256,
         scoring_method="prefill_length",
@@ -134,46 +138,27 @@ class SkipJoinMLFQ_Scheduler:
         **kwargs,
     ) -> None:
 
-        super(SkipJoinMLFQ_Scheduler, self).__init__()
+        super(ScoreScheduler, self).__init__()
 
         self.batch_size = batch_size
 
         # Scheduler 'timestep' / num batches it has scheduled.
         self.num_batches_scheduled = 0
 
-        # Build queues.
-        self.num_queues = num_queues
-        self.queue_limits = queue_limits
-        self.request_queues = [[] for _ in range(num_queues)]
+        # Maps request id to request. Needed for remove_request().
+        self.id_to_request = {}
+
+        # Maps request id to score. Lower scores are scheduled first.
+        self.request_scores = {}
+
+        # Holds requests ordered by scores.
+        self.sorted_requests = SortedKeyList(
+            [], key=lambda x: self.request_scores[x]
+        )
 
         # Preemption / promotion thresholds.
         self.min_batches_before_preemption = min_batches_before_preemption
         self.max_batches_before_promotion = max_batches_before_promotion
-
-        # Keep track of the previous batch so that we can update its scores.
-        # prev_batch holds prev requests themselves.
-        self.prev_batch: List[Request] = []
-
-        # Set up function to score requests.
-        assert scoring_method in ["prefill_length", "estimated_rpt"]
-
-        if scoring_method == "prefill_length":
-            self.scorer = PrefillLengthScorer(initial_score)
-        elif scoring_method == "estimated_rpt_score":
-            self.scorer = None
-
-        # ---- EXTRA STATE FOR REQUESTS, KEY IS REQUEST ID ----
-
-        # Maps request ids to requests.
-        self.id_to_request = {}
-
-        # Maps request id to (queue_idx, idx_in_queue); this is the current
-        # position of the request in the MLFQ data structure.
-        self.request_positions = {}
-
-        # Requests with low scores are scheduled first. TODO: Use something like
-        # a min heap to quickly find lowest scoring requests.
-        self.request_scores = {}
 
         # The first timestep a request is scheduled such that the request has
         # also been scheduled for all subsequent timesteps. Used to decide
@@ -183,6 +168,18 @@ class SkipJoinMLFQ_Scheduler:
         # The last timestep at which a prefill / decode iteration was run on
         # a request. Used to check if requests need promotion.
         self.last_timestep_scheduled = {}
+
+        # Keep track of the previous batch so that requests can remain in batch
+        # until min_batches_before_preemption.
+        self.prev_batch: List[Request] = []
+
+        # Set up function to score requests.
+        assert scoring_method in ["prefill_length", "estimated_rpt"]
+
+        if scoring_method == "prefill_length":
+            self.scorer = PrefillLengthScorer(initial_score)
+        elif scoring_method == "estimated_rpt_score":
+            self.scorer = None
 
     def add_request(self, request: Request):
         request_id = request.request_id
@@ -199,32 +196,16 @@ class SkipJoinMLFQ_Scheduler:
             self.num_batches_scheduled - 1
         )
 
-        # Score request.
+        # Score request and add to sorted request container.
         request_score = self.scorer(request)
         self.request_scores[request_id] = request_score
-
-        # Skip-join step. Priority is set to the quantum larger than the first
-        # iteration quantum.
-        for i, limit in enumerate(self.queue_limits):
-            if request_score < limit or i == len(self.queue_limits) - 1:
-                idx_in_queue = len(self.request_queues[i])
-                self.request_queues[i].append(request)
-                self.request_positions[request_id] = (i, idx_in_queue)
-                break
+        self.sorted_requests.add(request)
 
         return request
 
-    def compute_queue_idx(self, request_id):
-        """Returns the index of the MLFQ queue that request should be inside."""
-        for queue_idx, queue_limit in enumerate(self.queue_limits):
-            if queue_limit > self.request_scores[request_id]:
-                return queue_idx
-        return self.num_queues - 1
-
     def update_scores(self, requests):
-        """Updates scores and MLFQ positions of requests in the input list."""
-
-        for request_idx, request in enumerate(requests):
+        """Updates scores of requests in the input list."""
+        for request in requests:
             request_id = request.request_id
 
             # Rescore request. If score is same, no change needed to MLFQ
@@ -235,25 +216,12 @@ class SkipJoinMLFQ_Scheduler:
             if new_score == old_score:
                 continue
 
-            # Score changed, so set the request's new score and move it to
-            # correct queue.
+            # Score changed, so set the request's new score and move it in the
+            # sorted requests container appropriately.
             self.request_scores[request_id] = new_score
 
-            old_pos = self.request_positions[request_idx]
-            old_queue_idx, old_idx_in_queue = old_pos
-
-            new_queue_idx = self.compute_queue_idx(request_id)
-            new_idx_in_queue = len(self.request_queues[new_queue_idx])
-
-            if new_queue_idx == old_queue_idx:
-                continue
-
-            self.request_queues[old_queue_idx].pop(old_idx_in_queue)
-            self.request_queues[new_queue_idx].append(request)
-            self.request_positions[request_id] = (
-                new_queue_idx,
-                new_idx_in_queue,
-            )
+            self.sorted_requests.remove(request)
+            self.sorted_requests.add(request)
 
     def check_preemption_eligible(self, request):
         """Returns if a request should be preempted."""
@@ -273,8 +241,6 @@ class SkipJoinMLFQ_Scheduler:
         preemption_eligible = (
             num_consecutive_scheduled > self.min_batches_before_preemption
         )
-
-        # print(f"prompt = {request.prompt}, preemption_eligible = {preemption_eligible}")
 
         return preemption_eligible
 
@@ -296,15 +262,14 @@ class SkipJoinMLFQ_Scheduler:
             num_consecutive_not_scheduled > self.max_batches_before_promotion
         )
 
-        # print(f"prompt = {request.prompt}, promotion_eligible = {promotion_eligible}")
-
         return promotion_eligible
 
     def promote_requests(self, batch):
         """Adds as many promotion eligible requests as possible to the batch."""
         curr_batch_request_ids = set([request.request_id for request in batch])
 
-        for request_id, request in self.id_to_request.items():
+        # TODO: Make this sublinear in number of requests.
+        for request in self.sorted_requests:
             # If the batch is already full, don't try to promote more requests.
             if len(batch) == self.batch_size:
                 break
@@ -321,20 +286,15 @@ class SkipJoinMLFQ_Scheduler:
     def add_high_priority_requests(self, batch):
         curr_batch_request_ids = set([request.request_id for request in batch])
 
-        candidate_request_ids = list(self.request_scores.keys())
-        candidate_request_ids = sorted(
-            candidate_request_ids, key=lambda x: self.request_scores[x]
-        )
-
-        for candidate_request_id in candidate_request_ids:
+        for request in self.sorted_requests:
             if len(batch) == self.batch_size:
                 break
 
-            if candidate_request_id in curr_batch_request_ids:
+            if request.request_id in curr_batch_request_ids:
                 continue
 
-            batch.append(self.id_to_request[candidate_request_id])
-            curr_batch_request_ids.add(candidate_request_id)
+            batch.append(request)
+            curr_batch_request_ids.add(request.request_id)
 
     def update_ages(self, batch, prev_batch):
         """Updates first_timestep_scheduled and last_timestep_scheduled attrs.
@@ -377,8 +337,10 @@ class SkipJoinMLFQ_Scheduler:
                 self.num_batches_scheduled
             )
 
-    def schedule(self) -> List[Request]:
-        """Schedules a batch to run prefill / decode iterations on.
+    def schedule(self, stage: RequestStage) -> List[Request]:
+        """Schedules a batch to run prefill / decode iterations on. The stage
+        supplied is currently ignored; it is assumed that different instances
+        of the skip join scheduler will be created for prefill and decode.
 
         - Update scores and MLFQ positions for previously scheduled requests.
         - Preempt eligible requests.
@@ -386,6 +348,13 @@ class SkipJoinMLFQ_Scheduler:
         - Schedule high priority / low scoring requests.
         - Update metadata.
         """
+
+        # Clear requests in self.prev_batch that were removed.
+        # self.prev_batch = [
+        #     request
+        #     for request in self.prev_batch
+        #     if request.request_id in self.id_to_request
+        # ]
 
         # Batch returned to user, initialized to the previously scheduled batch.
         batch = [request for request in self.prev_batch]
@@ -416,19 +385,25 @@ class SkipJoinMLFQ_Scheduler:
         return batch
 
     def remove_request(self, finished_request_id):
-        if finished_request_id not in self.request_positions:
+        if finished_request_id not in self.id_to_request:
             raise ValueError(
-                f"Request with id {finished_request_id} not found in any queue"
+                f"Request with id {finished_request_id} not in scheduler."
             )
 
-        del self.id_to_request[finished_request_id]
+        finished_request = self.id_to_request[finished_request_id]
 
-        queue_idx, req_idx = self.request_positions[finished_request_id]
-        self.request_queues[queue_idx].pop(req_idx)
-
-        del self.request_positions[finished_request_id]
+        del self.request_scores[finished_request_id]
+        self.sorted_requests.remove(finished_request)
 
         del self.last_timestep_scheduled[finished_request_id]
 
         if finished_request_id in self.first_timestep_scheduled:
             del self.first_timestep_scheduled[finished_request_id]
+
+        del self.id_to_request[finished_request_id]
+
+        self.prev_batch = [
+            request
+            for request in self.prev_batch
+            if request.request_id != finished_request_id
+        ]
