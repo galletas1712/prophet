@@ -1,5 +1,5 @@
 from entrypoints.api import Request, CompletionType
-from schedulers.baselines import SkipJoinMLFQ_Scheduler
+from schedulers.score import SkipJoinMLFQ_Scheduler
 
 
 def test_preemption_promotion_thresholds():
