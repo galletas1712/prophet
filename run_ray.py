@@ -66,7 +66,7 @@ def driver(config):
     result_queue = Queue()
 
     request_generator = ShareGPTRequestGenerator.remote(
-        config.request_generator_corpus_path,
+        config.request_generator,
         config.model.tokenizer_path,
         request_queue
     )

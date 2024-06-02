@@ -64,42 +64,33 @@ class ShareGPTCorpus:
 class ShareGPTRequestGenerator:
     def __init__(
             self,
-            corpus_path: str,
+            config,
             tokenizer_path: str,
             request_queue: Queue,
-            max_prompt_tokens: int = 300,
-            num_secs: int = 20,
-            arrivals_per_sec: int = 10,
-            max_gen_len_interval: tuple[int, int] = (5, 450),
         ):
-        self.corpus_path = corpus_path
+        self.config = config
         self.tokenizer_path = tokenizer_path
         self.request_queue = request_queue
 
-        # Generation parameters
-        self.max_prompt_tokens = max_prompt_tokens
-        self.num_secs = num_secs
-        self.arrivals_per_sec = arrivals_per_sec
-        self.max_gen_len_interval = max_gen_len_interval
-    
     def load_corpus(self):
         print("Loading shareGPT corpus...")
-        self.corpus = ShareGPTCorpus(self.corpus_path, self.tokenizer_path, self.max_prompt_tokens)
+        self.corpus = ShareGPTCorpus(self.config.corpus_path, self.tokenizer_path, self.config.max_prompt_tokens)
         print("Done loading shareGPT corpus!")
     
     async def run(self):
         print("Begin request generation")
-        for _ in range(self.num_secs):
+        while True:
             await asyncio.sleep(1)
-            num_requests = np.random.poisson(self.arrivals_per_sec)
+            num_requests = np.random.poisson(self.config.arrivals_per_sec)
             for _ in range(num_requests):
                 request = Request(
                     self.corpus.sample(),
                     CompletionType.CHAT_COMPLETION,
-                    np.random.randint(*self.max_gen_len_interval)
+                    np.random.randint(self.config.max_gen_len_low, self.config.max_gen_len_high)
                 )
 
                 # Put into random prefill queue. Block until queue is free
+                print(f"Waiting to add request {request.request_id} to request queue")
                 await self.request_queue.put_async(request)
 
                 print(f"Request {request.request_id} added to request queue")
