@@ -36,6 +36,10 @@ class OutputConsumer:
             request = self.input_queue.get(block=True)
             request.output = self.formatter.decode_chat_completion(request.output_tokens, None)
             print(f"OutputConsumer received request {request.request_id}")
+            # Remove length prediction prefix from output
+            if self.config.decode_scheduler.scoring_method == 'estimated_rpt':
+                prefixed_content = request.output['generation']['content'] 
+                request.output['generation']['content'] = prefixed_content[prefixed_content.find('\n'):].lstrip()
             print(
                 f"Max Gen Len: {request.max_gen_len}, Output: {request.output}")
 

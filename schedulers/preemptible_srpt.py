@@ -16,7 +16,8 @@ class PreemptibleSRPT_Scheduler:
         max_batches_before_promotion=256,
         scoring_method="prefill_length",
         initial_score=0,               # Needed for EstimatedRPT_Scorer.
-        fcr_ratio = 1.5,               # Needed for EstimatedRPT_Scorer.
+        tokens_per_word=3,             # Needed for EstimatedRPT_Scorer.
+        fcr_ratio = 1.2,               # Needed for EstimatedRPT_Scorer.
         tokenizer_path="",             # Needed for EstimatedRPT_Scorer.
         num_tokens_before_scoring=5,   # Needed for EstimatedRPT_Scorer.
         **kwargs,
@@ -63,9 +64,11 @@ class PreemptibleSRPT_Scheduler:
 
         if scoring_method == "estimated_rpt":
             self.initial_score = initial_score
+            self.tokens_per_word = tokens_per_word
             self.max_score = 0
             self.num_tokens_before_scoring = num_tokens_before_scoring
             self.tokenizer = Tokenizer(tokenizer_path)
+            self.fcr_ratio = fcr_ratio
 
             # Maps request id to predicted length. Does not change. Used for FCR.
             self.request_perceived_lengths = {}
@@ -90,9 +93,11 @@ class PreemptibleSRPT_Scheduler:
                 return self.parse_error_score
             
             length_estimate = score_str.split("\n")[0].strip()
+            if "words" in length_estimate:
+                length_estimate = length_estimate.split("words")[0].strip()
             if length_estimate and length_estimate.isdigit():
                 self.max_score = max(self.max_score, int(length_estimate))
-                return int(length_estimate)
+                return int(length_estimate) * self.tokens_per_word
             else:
                 return self.max_score
         
@@ -134,7 +139,8 @@ class PreemptibleSRPT_Scheduler:
 
             # For ESTIMATED_RPT check if the the estimate is more the FCR_RATIO off, if so drop the score to the max score
             if (self.scoring_method == "estimated_rpt" 
-                and len(request.output_tokens) > self.request_perceived_lengths[request_id] * self.fcr_ratio):
+                  and len(request.output_tokens) > self.request_perceived_lengths[request_id] * self.fcr_ratio):
+                self.max_score = max(self.max_score, len(request.output_tokens))
                 new_score = self.max_score
                 self.request_perceived_lengths[request_id] = self.max_score
             else:
