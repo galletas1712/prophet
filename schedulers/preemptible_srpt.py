@@ -4,15 +4,7 @@ from typing import List
 from entrypoints.api import Request, RequestStage
 from schedulers.utils import register_scheduler
 
-
-class PrefillLengthScorer:
-
-    def __init__(self, *args) -> None:
-        pass
-
-    def __call__(self, request: Request):
-        assert request.prompt_tokens is not None
-        return len(request.prompt_tokens)
+from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 
 
 @register_scheduler("preemptible_srpt")
@@ -23,7 +15,10 @@ class PreemptibleSRPT_Scheduler:
         min_batches_before_preemption=4,
         max_batches_before_promotion=256,
         scoring_method="prefill_length",
-        initial_score=0,
+        initial_score=0,               # Needed for EstimatedRPT_Scorer.
+        parse_error_score=0,           # Needed for EstimatedRPT_Scorer.
+        tokenizer_path="",             # Needed for EstimatedRPT_Scorer.
+        num_tokens_before_scoring=5,   # Needed for EstimatedRPT_Scorer.
         **kwargs,
     ) -> None:
 
@@ -64,11 +59,39 @@ class PreemptibleSRPT_Scheduler:
 
         # Set up function to score requests.
         assert scoring_method in ["prefill_length", "estimated_rpt"]
+        self.scoring_method = scoring_method
 
-        if scoring_method == "prefill_length":
-            self.scorer = PrefillLengthScorer(initial_score)
-        elif scoring_method == "estimated_rpt_score":
-            self.scorer = None
+        if scoring_method == "estimated_rpt":
+            self.initial_score = initial_score
+            self.parse_error_score = parse_error_score
+            self.num_tokens_before_scoring = num_tokens_before_scoring
+            self.tokenizer = Tokenizer(tokenizer_path)
+    
+    def compute_score(self, request: Request):
+        if self.scoring_method == "prefill_length":
+            assert request.prompt_tokens is not None
+            return len(request.prompt_tokens)
+        
+        elif self.scoring_method == "estimated_rpt":
+            if len(request.output_tokens) < self.num_tokens_before_scoring:
+                return self.initial_score
+            
+            if request.request_id in self.request_scores:
+                return self.request_scores[request.request_id]
+            
+            score_str = self.tokenizer.decode(
+                request.output_tokens[:self.num_tokens_before_scoring]
+            )
+
+            if "\n" not in score_str:
+                return self.parse_error_score
+            
+            try:
+                return int(score_str.split("\n"))
+            except:
+                return self.parse_error_score
+        
+        return None
 
     def add_request(self, request: Request):
         request_id = request.request_id
@@ -86,7 +109,7 @@ class PreemptibleSRPT_Scheduler:
         )
 
         # Score request and add to sorted request container.
-        request_score = self.scorer(request)
+        request_score = self.compute_score(request)
         self.request_scores[request_id] = request_score
         self.prioritized_request_ids.add(request_id)
 
@@ -100,7 +123,7 @@ class PreemptibleSRPT_Scheduler:
             # Rescore request. If score is same, no change needed to MLFQ
             # position.
             old_score = self.request_scores[request_id]
-            new_score = self.scorer(request)
+            new_score = self.compute_score(request)
 
             if new_score == old_score:
                 continue

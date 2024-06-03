@@ -69,6 +69,7 @@ class ShareGPTRequestGenerator:
             request_queue: Queue,
         ):
         self.config = config
+        self.prompt_suffix = config.prompt_suffix
         self.tokenizer_path = tokenizer_path
         self.request_queue = request_queue
 
@@ -84,6 +85,10 @@ class ShareGPTRequestGenerator:
             num_requests = np.random.poisson(self.config.arrivals_per_sec)
             for _ in range(num_requests):
                 prompt = self.corpus.sample()
+                
+                if self.prompt_suffix is not None and len(self.prompt_suffix) > 0:
+                    prompt = f"{prompt} {self.prompt_suffix}"
+                
                 request = Request(
                     prompt,
                     self.corpus.formatter.encode_chat_completion(prompt),
