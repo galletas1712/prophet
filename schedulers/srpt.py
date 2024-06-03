@@ -1,47 +1,35 @@
 from entrypoints.api import Request, RequestStage
 from typing import List
+from sortedcontainers import SortedDict
 
 from schedulers.utils import register_scheduler
 
 
-# TODO(cathy) change definition of promptlen for dialog completion
 @register_scheduler("srpt")
 class SRPTScheduler:
     def __init__(self, batch_size, **kwargs) -> None:
         super(SRPTScheduler, self).__init__()
         self.batch_size = batch_size
-        self.request_list = []  # TODO(cathy) could ordered dict here
+        self.requests = SortedDict()
 
     def add_request(self, request) -> Request:
-        left, right = 0, len(self.request_list)
-        while left < right:
-            mid = (left + right) // 2
-            if len(self.request_list[mid].prompt) < len(request.prompt):
-                left = mid + 1
-            else:
-                right = mid
-        self.request_list.insert(left, request)
-        return request
+        # NOTE: Using prompt token length for now (even for decode)
+        # NOTE: Important the we don't modify prompt_tokens after prefill!
+        self.requests[(len(request.prompt_tokens), request.request_id)] = request
 
     def schedule(self, stage: RequestStage) -> List[Request]:
         batch = []
 
-        idx = 0
-        while idx < len(self.request_list):
-            request = self.request_list[idx]
+        for _, request in self.requests.items():
             assert request.stage is not RequestStage.DONE
-            if request.stage == stage:
-                batch.append(request)
-                if len(batch) == self.batch_size:
-                    break
-            idx += 1
+            if request.stage is not stage:
+                continue
+            batch.append(request)
+            if len(batch) == self.batch_size:
+                break
 
         return batch
 
-    def remove_request(self, finished_request_id):
-        self.request_list = [
-            request
-            for request in self.request_list
-            if request.request_id != finished_request_id
-        ]
+    def remove_request(self, request: Request):
+        self.requests.remove((len(request.prompt_tokens), request.request_id))
 

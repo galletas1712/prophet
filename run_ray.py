@@ -3,6 +3,7 @@ os.environ['RAY_DEDUP_LOGS'] = '0'  # noqa
 os.environ['RAY_COLOR_PREFIX'] = '1'  # noqa
 # Somehow we need to do this before importing Ray for no log dedup
 
+from models.llama3.tokenizer import LlamaFormatter, Tokenizer
 from ray_workers.decode import Decoder
 from ray_workers.prefill import Prefiller
 from ray_workers.shareGPT import ShareGPTRequestGenerator
@@ -21,13 +22,19 @@ class OutputConsumer:
         self.benchmark_results_file = os.path.join(
             output_dir, 'benchmark_results.csv')
 
+        self.tokenizer = Tokenizer(config.model.tokenizer_path)
+        self.formatter = LlamaFormatter(self.tokenizer)
+
         f = open(self.benchmark_results_file, 'w')
         f.write('gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
         f.close()
 
+        print("Started Output Consumer!")
+
     def run(self):
         while True:
             request = self.input_queue.get(block=True)
+            request.output = self.formatter.decode_chat_completion(request.output_tokens, None)
             print(f"OutputConsumer received request {request.request_id}")
             print(
                 f"Max Gen Len: {request.max_gen_len}, Output: {request.output}")

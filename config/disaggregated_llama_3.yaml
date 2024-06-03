@@ -1,7 +1,7 @@
 defaults:
   - model: llama_3
   - coordinator: ray_coordinator
-  - prefill_scheduler: fcfs
+  - prefill_scheduler: srpt
   - decode_scheduler: fcfs
   - request_generator: shareGPT_uniform_1_rps
   - _self_

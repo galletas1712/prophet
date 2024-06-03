@@ -274,7 +274,9 @@ class ScoreScheduler:
 
         return batch
 
-    def remove_request(self, finished_request_id):
+    def remove_request(self, request: Request):
+        finished_request_id = request.request_id
+
         if finished_request_id not in self.id_to_request:
             raise ValueError(
                 f"Request with id {finished_request_id} not in scheduler."

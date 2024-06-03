@@ -4,7 +4,7 @@ import ray
 
 import numpy as np
 
-from entrypoints.api import CompletionType, Request
+from entrypoints.api import Request
 from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 from ray.util.queue import Queue
 
@@ -83,9 +83,10 @@ class ShareGPTRequestGenerator:
             await asyncio.sleep(1)
             num_requests = np.random.poisson(self.config.arrivals_per_sec)
             for _ in range(num_requests):
+                prompt = self.corpus.sample()
                 request = Request(
-                    self.corpus.sample(),
-                    CompletionType.CHAT_COMPLETION,
+                    prompt,
+                    self.corpus.formatter.encode_chat_completion(prompt),
                     np.random.randint(self.config.max_gen_len_low, self.config.max_gen_len_high)
                 )
 

@@ -12,10 +12,6 @@ class WorkerType (Enum):
     PREFILL = 0
     DECODE = 1
 
-class CompletionType(Enum):
-    CHAT_COMPLETION = 0
-    TEXT_COMPLETION = 1
-
 
 class RequestStage(Enum):
     PREFILL = 0
@@ -26,15 +22,13 @@ class RequestStage(Enum):
 @dataclass
 class Request:
     prompt: str | Any
-    completion_type: CompletionType
+    prompt_tokens: List[int]
     max_gen_len: int
 
     request_id: uuid.UUID = field(default_factory=uuid.uuid4)
     idx_in_data_batch: Optional[int] = None
 
     stage: RequestStage = RequestStage.PREFILL
-
-    prompt_tokens: Optional[List[int]] = None  # Populated at prefill.
     output_tokens: List[int] = field(default_factory=list)
 
     # Populated when request stage set to DONE.

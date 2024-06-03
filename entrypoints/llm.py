@@ -97,7 +97,7 @@ class LLM:
                 slot_request.free_cache()
 
                 # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
-                self.scheduler.remove_request(slot_request.request_id)
+                self.scheduler.remove_request(slot_request)
                 self.num_requests_in_progress -= 1
 
                 self.decode_batch.clear_slot(slot_idx)

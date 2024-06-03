@@ -33,5 +33,5 @@ class RandomScheduler:
 
         return batch
 
-    def remove_request(self, finished_request_id):
-        self.request_dict.pop(finished_request_id)
+    def remove_request(self, request: Request):
+        self.request_dict.pop(request.request_id)

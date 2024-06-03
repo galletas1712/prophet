@@ -20,7 +20,7 @@ class FCFSScheduler:
         # Iterate over the requests dict, popping items that have finished.
         batch = []
 
-        for request_id, request in self.request_dict.items():
+        for _, request in self.request_dict.items():
             assert request.stage is not RequestStage.DONE
             if request.stage is not stage:
                 continue
@@ -30,5 +30,5 @@ class FCFSScheduler:
 
         return batch
 
-    def remove_request(self, finished_request_id):
-        self.request_dict.pop(finished_request_id)
+    def remove_request(self, request: Request):
+        self.request_dict.pop(request.request_id)
