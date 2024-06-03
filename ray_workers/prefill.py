@@ -92,8 +92,11 @@ class Prefiller:
             if prefill_data_batch is None:
                 continue
 
+            # Log successful prefill + immediately remove from prefill scheduler
+            # as no more prefills for these requests will be done.
             for request in prefill_data_batch.requests:
                 print(f"Prefilled {request.request_id}")
+                self.llm.get_scheduler().remove_request(request)
 
             # Add to pending queue
             for request in prefill_data_batch.requests:

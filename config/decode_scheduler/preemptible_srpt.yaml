@@ -1,4 +1,4 @@
-name: score
+name: preemptible_srpt
 
 batch_size: 16
 min_batches_before_preemption: 4

@@ -1,5 +1,5 @@
-from entrypoints.api import Request, CompletionType
-from schedulers.score import SkipJoinMLFQ_Scheduler
+from entrypoints.api import Request, RequestStage
+from schedulers.preemptible_srpt import PreemptibleSRPT_Scheduler
 
 
 def test_preemption_promotion_thresholds():
@@ -26,10 +26,8 @@ def test_preemption_promotion_thresholds():
     min_batches_before_preemption = 4
     max_batches_before_promotion = 8
 
-    scheduler = SkipJoinMLFQ_Scheduler(
+    scheduler = PreemptibleSRPT_Scheduler(
         batch_size=1,
-        num_queues=4,
-        queue_limits=[2, 4, 8, 16],
         min_batches_before_preemption=min_batches_before_preemption,
         max_batches_before_promotion=max_batches_before_promotion,
         scoring_method="prefill_length",
@@ -37,11 +35,18 @@ def test_preemption_promotion_thresholds():
     )
 
     # Low priority request.
-    request_1 = Request("12345678", CompletionType.TEXT_COMPLETION)
+    request_1 = Request(
+        prompt="12345678", 
+        prompt_tokens=[1, 2, 3, 4, 5, 6, 7, 8],
+        max_gen_len=32,
+        stage=RequestStage.DECODE
+    )
     scheduler.add_request(request_1)
 
     # High priority request.
-    request_2 = Request("2", CompletionType.TEXT_COMPLETION)
+    request_2 = Request(
+        prompt="2", prompt_tokens=[2], max_gen_len=32, stage=RequestStage.DECODE
+    )
     scheduler.add_request(request_2)
     
     for _ in range(5):
@@ -49,7 +54,7 @@ def test_preemption_promotion_thresholds():
         # max_batches_before_promotion threshold before request_1 is promoted 
         # into batch.
         for __ in range(max_batches_before_promotion):
-            batch = scheduler.schedule()
+            batch = scheduler.schedule(RequestStage.DECODE)
 
             assert len(batch) == 1        
             assert batch[0].request_id == request_2.request_id
@@ -57,7 +62,7 @@ def test_preemption_promotion_thresholds():
         # Now, request_1 should be promoted and run for 
         # min_batches_before_preemption.
         for __ in range(min_batches_before_preemption):
-            batch = scheduler.schedule()
+            batch = scheduler.schedule(RequestStage.DECODE)
 
             assert len(batch) == 1        
             assert batch[0].request_id == request_1.request_id
