@@ -78,6 +78,13 @@ class ShareGPTRequestGenerator:
         self.corpus = ShareGPTCorpus(self.config.corpus_path, self.tokenizer_path, self.config.max_prompt_tokens)
         print("Done loading shareGPT corpus!")
     
+    def _append_prompt_suffix(self, prompt):
+        prompt.append({
+            "role": "user",
+            "content": self.prompt_suffix
+        })
+        return prompt
+    
     async def run(self):
         print("Begin request generation")
         while True:
@@ -87,7 +94,7 @@ class ShareGPTRequestGenerator:
                 prompt = self.corpus.sample()
                 
                 if self.prompt_suffix is not None and len(self.prompt_suffix) > 0:
-                    prompt = f"{prompt} {self.prompt_suffix}"
+                    self._append_prompt_suffix(prompt)
                 
                 request = Request(
                     prompt,

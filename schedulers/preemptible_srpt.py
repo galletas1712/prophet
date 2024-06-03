@@ -16,7 +16,7 @@ class PreemptibleSRPT_Scheduler:
         max_batches_before_promotion=256,
         scoring_method="prefill_length",
         initial_score=0,               # Needed for EstimatedRPT_Scorer.
-        parse_error_score=0,           # Needed for EstimatedRPT_Scorer.
+        fcr_ratio = 1.5,               # Needed for EstimatedRPT_Scorer.
         tokenizer_path="",             # Needed for EstimatedRPT_Scorer.
         num_tokens_before_scoring=5,   # Needed for EstimatedRPT_Scorer.
         **kwargs,
@@ -63,9 +63,12 @@ class PreemptibleSRPT_Scheduler:
 
         if scoring_method == "estimated_rpt":
             self.initial_score = initial_score
-            self.parse_error_score = parse_error_score
+            self.max_score = 0
             self.num_tokens_before_scoring = num_tokens_before_scoring
             self.tokenizer = Tokenizer(tokenizer_path)
+
+            # Maps request id to predicted length. Does not change. Used for FCR.
+            self.request_perceived_lengths = {}
     
     def compute_score(self, request: Request):
         if self.scoring_method == "prefill_length":
@@ -86,10 +89,12 @@ class PreemptibleSRPT_Scheduler:
             if "\n" not in score_str:
                 return self.parse_error_score
             
-            try:
-                return int(score_str.split("\n"))
-            except:
-                return self.parse_error_score
+            length_estimate = score_str.split("\n")[0].strip()
+            if length_estimate and length_estimate.isdigit():
+                self.max_score = max(self.max_score, int(length_estimate))
+                return int(length_estimate)
+            else:
+                return self.max_score
         
         return None
 
@@ -113,6 +118,9 @@ class PreemptibleSRPT_Scheduler:
         self.request_scores[request_id] = request_score
         self.prioritized_request_ids.add(request_id)
 
+        if self.scoring_method == "estimated_rpt":
+            self.request_perceived_lengths[request_id] = request_score
+
         return request
 
     def update_scores(self, requests):
@@ -123,7 +131,14 @@ class PreemptibleSRPT_Scheduler:
             # Rescore request. If score is same, no change needed to MLFQ
             # position.
             old_score = self.request_scores[request_id]
-            new_score = self.compute_score(request)
+
+            # For ESTIMATED_RPT check if the the estimate is more the FCR_RATIO off, if so drop the score to the max score
+            if (self.scoring_method == "estimated_rpt" 
+                and len(request.output_tokens) > self.request_perceived_lengths[request_id] * self.fcr_ratio):
+                new_score = self.max_score
+                self.request_perceived_lengths[request_id] = self.max_score
+            else:
+                new_score = self.compute_score(request)
 
             if new_score == old_score:
                 continue
@@ -307,6 +322,8 @@ class PreemptibleSRPT_Scheduler:
 
         self.prioritized_request_ids.remove(finished_request_id)
         del self.request_scores[finished_request_id]
+        if self.scoring_method == "estimated_rpt":
+            del self.request_perceived_lengths[finished_request_id]
 
         del self.last_timestep_scheduled[finished_request_id]
 
