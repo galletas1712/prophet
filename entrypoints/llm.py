@@ -35,6 +35,9 @@ class LLM:
             )
 
         self.num_requests_in_progress = 0
+    
+    def get_scheduler(self) -> Any:
+        return self.scheduler
 
     def step_prefill(self) -> Optional[PrefillDataBatch]:
         # NOTE: sometimes we might call step_prefill with nothing in the queue

@@ -31,5 +31,6 @@ class SRPTScheduler:
         return batch
 
     def remove_request(self, request: Request):
-        self.requests.remove((len(request.prompt_tokens), request.request_id))
+        request_key = (len(request.prompt_tokens), request.request_id)
+        del self.requests[request_key]
 

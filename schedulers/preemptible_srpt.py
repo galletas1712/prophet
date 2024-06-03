@@ -15,8 +15,8 @@ class PrefillLengthScorer:
         return len(request.prompt_tokens)
 
 
-@register_scheduler("score")
-class ScoreScheduler:
+@register_scheduler("preemptible_srpt")
+class PreemptibleSRPT_Scheduler:
     def __init__(
         self,
         batch_size,
@@ -27,7 +27,7 @@ class ScoreScheduler:
         **kwargs,
     ) -> None:
 
-        super(ScoreScheduler, self).__init__()
+        super(PreemptibleSRPT_Scheduler, self).__init__()
 
         self.batch_size = batch_size
 
@@ -40,8 +40,8 @@ class ScoreScheduler:
         # Maps request id to score. Lower scores are scheduled first.
         self.request_scores = {}
 
-        # Holds requests ordered by scores.
-        self.sorted_requests = SortedKeyList(
+        # Holds request ids ordered by scores.
+        self.prioritized_request_ids = SortedKeyList(
             [], key=lambda x: self.request_scores[x]
         )
 
@@ -88,7 +88,7 @@ class ScoreScheduler:
         # Score request and add to sorted request container.
         request_score = self.scorer(request)
         self.request_scores[request_id] = request_score
-        self.sorted_requests.add(request)
+        self.prioritized_request_ids.add(request_id)
 
         return request
 
@@ -107,10 +107,9 @@ class ScoreScheduler:
 
             # Score changed, so set the request's new score and move it in the
             # sorted requests container appropriately.
+            self.prioritized_request_ids.remove(request_id)
             self.request_scores[request_id] = new_score
-
-            self.sorted_requests.remove(request)
-            self.sorted_requests.add(request)
+            self.prioritized_request_ids.add(request_id)
 
     def check_preemption_eligible(self, request):
         """Returns if a request should be preempted."""
@@ -158,7 +157,9 @@ class ScoreScheduler:
         curr_batch_request_ids = set([request.request_id for request in batch])
 
         # TODO: Make this sublinear in number of requests.
-        for request in self.sorted_requests:
+        for request_id in self.prioritized_request_ids:
+            request = self.id_to_request[request_id]
+
             # If the batch is already full, don't try to promote more requests.
             if len(batch) == self.batch_size:
                 break
@@ -168,22 +169,22 @@ class ScoreScheduler:
                 continue
 
             # Only add to batch if the promotion candidate is not already in it.
-            if request.request_id not in curr_batch_request_ids:
+            if request_id not in curr_batch_request_ids:
                 batch.append(request)
-                curr_batch_request_ids.add(request.request_id)
+                curr_batch_request_ids.add(request_id)
 
     def add_high_priority_requests(self, batch):
         curr_batch_request_ids = set([request.request_id for request in batch])
 
-        for request in self.sorted_requests:
+        for request_id in self.prioritized_request_ids:
             if len(batch) == self.batch_size:
                 break
 
-            if request.request_id in curr_batch_request_ids:
+            if request_id in curr_batch_request_ids:
                 continue
 
-            batch.append(request)
-            curr_batch_request_ids.add(request.request_id)
+            batch.append(self.id_to_request[request_id])
+            curr_batch_request_ids.add(request_id)
 
     def update_ages(self, batch, prev_batch):
         """Updates first_timestep_scheduled and last_timestep_scheduled attrs.
@@ -281,10 +282,8 @@ class ScoreScheduler:
                 f"Request with id {finished_request_id} not in scheduler."
             )
 
-        finished_request = self.id_to_request[finished_request_id]
-
+        self.prioritized_request_ids.remove(finished_request_id)
         del self.request_scores[finished_request_id]
-        self.sorted_requests.remove(finished_request)
 
         del self.last_timestep_scheduled[finished_request_id]
 
