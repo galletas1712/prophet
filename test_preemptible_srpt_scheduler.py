@@ -1,11 +1,5 @@
-<<<<<<< HEAD:test_preemptible_srpt_scheduler.py
 from entrypoints.api import Request, RequestStage
 from schedulers.preemptible_srpt import PreemptibleSRPT_Scheduler
-=======
-from entrypoints.api import Request, CompletionType
-from schedulers.score import SkipJoinMLFQ_Scheduler
-from entrypoints.api import RequestStage
->>>>>>> refs/remotes/origin/scheduler:test_skip_join_scheduler.py
 
 
 def test_preemption_promotion_thresholds():
