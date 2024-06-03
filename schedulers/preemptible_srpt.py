@@ -96,9 +96,14 @@ class PreemptibleSRPT_Scheduler:
             if "words" in length_estimate:
                 length_estimate = length_estimate.split("words")[0].strip()
             if length_estimate and length_estimate.isdigit():
-                self.max_score = max(self.max_score, int(length_estimate))
+                # Take minimum with max_gen_len to take into account truncation.
+                length_estimate = int(length_estimate)
+                length_estimate = min(request.max_gen_len, length_estimate)
+
+                self.max_score = max(self.max_score, length_estimate)
                 return int(length_estimate) * self.tokens_per_word
             else:
+                # TODO: Use max_gen_len instead?
                 return self.max_score
         
         return None

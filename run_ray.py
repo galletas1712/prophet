@@ -37,7 +37,7 @@ class OutputConsumer:
             request.output = self.formatter.decode_chat_completion(request.output_tokens, None)
             print(f"OutputConsumer received request {request.request_id}")
             # Remove length prediction prefix from output
-            if self.config.decode_scheduler.scoring_method == 'estimated_rpt':
+            if hasattr(self.config.decode_scheduler, 'scoring_method') and self.config.decode_scheduler.scoring_method == 'estimated_rpt':
                 prefixed_content = request.output['generation']['content'] 
                 request.output['generation']['content'] = prefixed_content[prefixed_content.find('\n'):].lstrip()
             print(

@@ -79,11 +79,9 @@ class ShareGPTRequestGenerator:
         print("Done loading shareGPT corpus!")
     
     def _append_prompt_suffix(self, prompt):
-        prompt.append({
-            "role": "user",
-            "content": self.prompt_suffix
+        prompt[-1].update({
+            "content": prompt[-1]["content"] + "\n\n" + self.prompt_suffix
         })
-        return prompt
     
     async def run(self):
         print("Begin request generation")
@@ -92,7 +90,6 @@ class ShareGPTRequestGenerator:
             num_requests = np.random.poisson(self.config.arrivals_per_sec)
             for _ in range(num_requests):
                 prompt = self.corpus.sample()
-                
                 if self.prompt_suffix is not None and len(self.prompt_suffix) > 0:
                     self._append_prompt_suffix(prompt)
                 

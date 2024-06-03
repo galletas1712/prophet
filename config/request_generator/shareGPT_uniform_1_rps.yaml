@@ -1,7 +1,7 @@
-corpus_path: /home/ubuntu/shareGPT.json
+defaults:
+- shareGPT_base
+
 arrivals_per_sec: 1
 max_prompt_tokens: 300
 max_gen_len_low: 5
 max_gen_len_high: 450
-
-prompt_suffix: "Before responding to the above instruction, you have to predict the length of your response. Print only the estimated number of words in your response in the first line. Then change to a new line to respond to the instruction."

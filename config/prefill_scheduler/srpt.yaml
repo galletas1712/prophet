@@ -2,3 +2,4 @@ name: srpt
 
 batch_size: 1
 max_requests_in_scheduler: 32
+scoring_method: prefill_length
