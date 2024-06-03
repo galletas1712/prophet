@@ -11,7 +11,6 @@ class PrefillLengthScorer:
         pass
 
     def __call__(self, request: Request):
-        # NOTE: ScoreScheduler only meant to be used in decode stage
         assert request.prompt_tokens is not None
         return len(request.prompt_tokens)
 
