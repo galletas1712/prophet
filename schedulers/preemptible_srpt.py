@@ -65,7 +65,6 @@ class PreemptibleSRPT_Scheduler:
         if scoring_method == "estimated_rpt":
             self.initial_score = initial_score
             self.tokens_per_word = tokens_per_word
-            self.max_score = 0
             self.num_tokens_before_scoring = num_tokens_before_scoring
             self.tokenizer = Tokenizer(tokenizer_path)
             self.fcr_ratio = fcr_ratio
@@ -97,14 +96,10 @@ class PreemptibleSRPT_Scheduler:
                 length_estimate = length_estimate.split("words")[0].strip()
             if length_estimate and length_estimate.isdigit():
                 # Take minimum with max_gen_len to take into account truncation.
-                length_estimate = int(length_estimate)
-                length_estimate = min(request.max_gen_len, length_estimate)
-
-                self.max_score = max(self.max_score, length_estimate)
-                return int(length_estimate) * self.tokens_per_word
+                length_estimate = min(int(length_estimate) * self.tokens_per_word, request.max_gen_len)
+                return length_estimate
             else:
-                # TODO: Use max_gen_len instead?
-                return self.max_score
+                return request.max_gen_len
         
         return None
 
@@ -145,9 +140,8 @@ class PreemptibleSRPT_Scheduler:
             # For ESTIMATED_RPT check if the the estimate is more the FCR_RATIO off, if so drop the score to the max score
             if (self.scoring_method == "estimated_rpt" 
                   and len(request.output_tokens) > self.request_perceived_lengths[request_id] * self.fcr_ratio):
-                self.max_score = max(self.max_score, len(request.output_tokens))
-                new_score = self.max_score
-                self.request_perceived_lengths[request_id] = self.max_score
+                new_score = request.max_gen_len
+                self.request_perceived_lengths[request_id] = new_score
             else:
                 new_score = self.compute_score(request)
 
