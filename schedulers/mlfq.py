@@ -52,13 +52,6 @@ class SkipJoinMLFQ_scheduler:
                 MLFQRequestInfo(request, 0, self.now)
             )
 
-        print("QUEUE")
-        for i, queue in enumerate(self.request_queues):
-            print(f"Queue {i}:")
-            for req in queue:
-                print(req.request.request_id, req.iteration_number)
-        print("\n")
-
         return request
     
     def schedule(self, stage: RequestStage) -> List[Request]:
