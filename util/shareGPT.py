@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 
-from entrypoints.api import CompletionType, Request
+from entrypoints.api import Request
 from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 
 shareGPTPath = '/home/ubuntu/shareGPT.json'
@@ -69,7 +69,6 @@ def request_generator(request_queue, num_termination_requests):
         for _ in range(num_requests):
             request = Request(
                 next(dialogs),
-                CompletionType.CHAT_COMPLETION,
                 np.random.randint(5, 450),
             )
             logger.info(f"START {request.request_id} prompt_len {len(

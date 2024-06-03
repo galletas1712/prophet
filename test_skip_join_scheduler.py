@@ -1,5 +1,5 @@
 from entrypoints.api import Request, CompletionType
-from schedulers.baselines import SkipJoinMLFQ_scheduler
+from schedulers.score import SkipJoinMLFQ_Scheduler
 from entrypoints.api import RequestStage
 
 

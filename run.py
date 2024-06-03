@@ -1,6 +1,4 @@
 import hydra
-from typing import List
-
 import torch
 
 from entrypoints.llm import LLM
@@ -19,19 +17,23 @@ def run_model(config):
     total_requests = 0
 
     for prompt in TEST_PROMPTS:
-        request = Request(prompt, CompletionType.TEXT_COMPLETION)
+        request = Request(
+            prompt, CompletionType.TEXT_COMPLETION, max_gen_len=128
+        )
         llm.add_request(request)
         total_requests += 1
 
     for dialog in TEST_DIALOGS:
-        request = Request(dialog, CompletionType.CHAT_COMPLETION)
+        request = Request(
+            dialog, CompletionType.CHAT_COMPLETION, max_gen_len=128
+        )
         llm.add_request(request)
         total_requests += 1
 
     outputs = []
 
     llm.step_prefill()
-    
+
     while len(outputs) < total_requests:
         done_requests, _ = llm.step_decode()
         for request in done_requests:
@@ -39,9 +41,10 @@ def run_model(config):
             print(request.output)
             print()
             outputs.append(request.output)
-        
+
         if len(llm.decode_batch.get_free_slots()) > 0:
             llm.step_prefill()
+
 
 if __name__ == "__main__":
     run_model()

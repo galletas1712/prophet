@@ -9,11 +9,7 @@ from typing import List
 
 import torch
 
-from entrypoints.api import (
-    Request,
-    RequestStage,
-    CompletionType,
-)
+from entrypoints.api import Request, RequestStage
 from entrypoints.databatch import PrefillDataBatch, DecodeDataBatch
 from models.llama3.model import ModelArgs, Transformer
 from models.llama3.tokenizer import Tokenizer, LlamaFormatter
@@ -33,7 +29,6 @@ class Llama:
         ckpt_dir: str,
         tokenizer_path: str,
         max_seq_len: int,
-        max_batch_size: int,
         glob_params: GlobalGenerationParams,
     ) -> "Llama":
         """
@@ -43,7 +38,6 @@ class Llama:
             ckpt_dir (str): Path to the directory containing checkpoint files.
             tokenizer_path (str): Path to the tokenizer file.
             max_seq_len (int): Maximum sequence length for input text.
-            max_batch_size (int): Maximum batch size for inference.
             model_parallel_size (Optional[int], optional): Number of model parallel processes.
                 If not provided, it's determined from the environment. Defaults to None.
 
@@ -68,7 +62,6 @@ class Llama:
             params = json.loads(f.read())
             model_args: ModelArgs = ModelArgs(
                 max_seq_len=max_seq_len,
-                max_batch_size=max_batch_size,
                 **params,
             )
 
@@ -105,19 +98,6 @@ class Llama:
 
     @torch.inference_mode()
     def step_prefill(self, requests: List[Request]):
-        # Tokenize prompts
-        for request in requests:
-            if request.completion_type is CompletionType.CHAT_COMPLETION:
-                request.prompt_tokens = self.formatter.encode_chat_completion(
-                    request.prompt
-                )
-            elif request.completion_type is CompletionType.TEXT_COMPLETION:
-                request.prompt_tokens = self.formatter.encode_text_completion(
-                    request.prompt
-                )
-            else:
-                raise Exception("Invalid completion type")
-
         # Form the batch.
         prefill_batch = PrefillDataBatch(
             requests,
@@ -186,7 +166,8 @@ class Llama:
         ]
 
         if self.glob_params.temperature > 0:
-            probs = torch.softmax(logits / self.glob_params.temperature, dim=-1)
+            probs = torch.softmax(
+                logits / self.glob_params.temperature, dim=-1)
             next_token = sample_top_p(probs, self.glob_params.top_p)
         else:
             next_token = torch.argmax(logits, dim=-1)
@@ -219,15 +200,6 @@ class Llama:
                 or len(request.output_tokens) + len(request.prompt_tokens)
                 == self.model_args.max_seq_len
             ):
-                if request.completion_type is CompletionType.CHAT_COMPLETION:
-                    request.output = self.formatter.decode_chat_completion(
-                        request.output_tokens, None
-                    )
-                elif request.completion_type is CompletionType.TEXT_COMPLETION:
-                    request.output = self.formatter.decode_text_completion(
-                        request.output_tokens, None
-                    )
-
                 request.stage = RequestStage.DONE
 
             # Generation needs to continue so set stage to DECODE.

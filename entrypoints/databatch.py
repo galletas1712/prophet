@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, List
 
+import gc
 import torch
 
 from sortedcontainers import SortedSet
@@ -375,19 +376,26 @@ class DecodeDataBatch:
         # Output_tokens should only be one element from prefill
         prompt_len = len(request.prompt_tokens)
         output_len = len(request.output_tokens)
-        assert output_len == 1
         self.input_tokens[idx] = torch.tensor(
-            request.output_tokens, dtype=torch.long, device="cuda")
+            request.output_tokens[-1:], dtype=torch.long, device="cuda")
+        assert self.input_tokens[idx].shape[0] == 1
 
         # Only token we process
         self.start_pos[idx] = prompt_len + output_len - 1
 
-        # Copy KV cache over
-        self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.clone()
-        self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.clone()
+        # Can't hurt to make sure it's in CUDA.
+        self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.cuda()
+        self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.cuda()
 
         self.free_slots.discard(idx)
         self.occupied_slots.add(idx)
+
+    def preempt_slot(self, idx: int, request: Request):
+        old_request = self.requests[idx]
+        old_request.cache_k = self.cache_k[idx, :self.start_pos[idx] + 1].clone()
+        old_request.cache_v = self.cache_v[idx, :self.start_pos[idx] + 1].clone()
+        self.clear_slot(idx)
+        self.fill_slot(idx, request)
 
     def clear_slot(self, idx: int):
         self.requests[idx].idx_in_batch = None
@@ -401,6 +409,9 @@ class DecodeDataBatch:
 
     def get_free_slots(self):
         return list(self.free_slots)
+
+    def get_occupied_slots(self):
+        return list(self.occupied_slots)
 
     def get_requests_already_in(self):
         return [self.requests[idx].request_id for idx in self.occupied_slots]

@@ -1,11 +1,11 @@
 defaults:
   - model: llama_3
-  - coordinator: mp_coordinator
-  - prefill_scheduler: ../scheduler/srpt
-  - decode_scheduler: ../scheduler/skip_join_mlfq
+  - coordinator: ray_coordinator
+  - prefill_scheduler: srpt
+  - decode_scheduler: fcfs
+  - request_generator: shareGPT_uniform_1_rps
   - _self_
   - override hydra/hydra_logging: disabled  
   - override hydra/job_logging: disabled
 
 seed: 1
-benchmark_csv_path: /home/ubuntu/benchmark_results/decode_mlfq.csv
