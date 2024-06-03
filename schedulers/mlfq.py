@@ -51,6 +51,14 @@ class SkipJoinMLFQ_scheduler:
             self.request_queues[-1].append(
                 MLFQRequestInfo(request, 0, self.now)
             )
+
+        print("QUEUE")
+        for i, queue in enumerate(self.request_queues):
+            print(f"Queue {i}:")
+            for req in queue:
+                print(req.request.request_id, req.iteration_number)
+        print("\n")
+
         return request
     
     def schedule(self, stage: RequestStage) -> List[Request]:
@@ -96,10 +104,10 @@ class SkipJoinMLFQ_scheduler:
         return batch
 
     def _move_request_to_lower_queue(self, queue_idx, req_idx):
+        request_info = self.request_queues[queue_idx].pop(req_idx)
         if queue_idx == self.num_queues - 1:
-            self.request_queues[queue_idx][req_idx].iteration_number += 1
+            self.request_queues[queue_idx].append(request_info)
         else:
-            request_info = self.request_queues[queue_idx].pop(req_idx)
             self.request_queues[queue_idx + 1].append(request_info)
 
     def _reset_request(self, queue_idx, req_idx):

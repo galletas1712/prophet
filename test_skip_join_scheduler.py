@@ -22,7 +22,7 @@ def test_preemption_promotion_thresholds():
     threshold. Runs for 4 iterations, and is then preempted because of a higher
     priority request (number 2).
     """
-    print(f"---- TESTING PREEMPTION / PROMOTION THRESHOLDS ----\n")
+    print(f"---- TESTING MLFQ ----\n")
 
     scheduler = SkipJoinMLFQ_scheduler(
         batch_size=1,
@@ -32,16 +32,24 @@ def test_preemption_promotion_thresholds():
     )
 
     # Low priority request.
-    request_1 = Request("123")
+    request_1 = Request(
+        "123",
+        [1, 2, 3],
+        32
+    )
     scheduler.add_request(request_1)
 
     # High priority request.
-    request_2 = Request("2")
+    request_2 = Request(
+        "2",
+        [2],
+        32
+    )
     scheduler.add_request(request_2)
 
     for __ in range(2):
         batch = scheduler.schedule(stage=RequestStage.PREFILL)
-        assert len(batch) == 1        
+        assert len(batch) == 1
         assert batch[0].request_id == request_2.request_id
 
     for __ in range(2):
