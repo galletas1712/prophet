@@ -206,8 +206,25 @@ class PreemptibleSRPT_Scheduler:
         """Adds as many promotion eligible requests as possible to the batch."""
         curr_batch_request_ids = set([request.request_id for request in batch])
 
+        # HACK: Sometimes requests are still in prioritized_request_ids that 
+        # aren't in self.id_to_request. Find these and delete them at the end.
+        request_ids_to_delete = []
+
         # TODO: Make this sublinear in number of requests.
         for request_id in self.prioritized_request_ids:
+
+            # Add missing requests to list of requests to remove from scheduler.
+            if request_id not in self.id_to_request:
+                request_ids_to_delete.append(request_id)
+
+                # Remove the missing request from the batch if needed.
+                if request_id in curr_batch_request_ids:
+                    curr_batch_request_ids.remove(request_id)
+                
+                batch = [r for r in batch if r.request_id != request_id]
+
+                continue
+
             request = self.id_to_request[request_id]
 
             # If the batch is already full, don't try to promote more requests.
@@ -222,6 +239,29 @@ class PreemptibleSRPT_Scheduler:
             if request_id not in curr_batch_request_ids:
                 batch.append(request)
                 curr_batch_request_ids.add(request_id)
+        
+        # Delete missing requests.
+        for request_id in request_ids_to_delete:
+            self.prioritized_request_ids.remove(request_id)
+
+            if request_id in self.request_scores:
+                del self.request_scores[request_id]
+            
+            if self.scoring_method == "estimated_rpt" and request_id in self.request_perceived_lengths:
+                del self.request_perceived_lengths[request_id]
+
+            if request_id in self.last_timestep_scheduled:
+                del self.last_timestep_scheduled[request_id]
+
+            if request_id in self.first_timestep_scheduled:
+                del self.first_timestep_scheduled[request_id]
+
+        self.prev_batch = [
+            request
+            for request in self.prev_batch
+            if request.request_id not in request_ids_to_delete
+        ]
+
 
     def add_high_priority_requests(self, batch):
         curr_batch_request_ids = set([request.request_id for request in batch])
