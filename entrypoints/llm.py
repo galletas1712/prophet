@@ -96,9 +96,6 @@ class LLM:
         done_requests = []
         for slot_idx, slot_request in enumerate(self.decode_batch.requests):
             if slot_request is not None and slot_request.stage is RequestStage.DONE:
-                # NOTE: Important otherwise we get memory leak
-                slot_request.free_cache()
-
                 # NOTE: slot_request MUST become None after this (set in DecodeDataBatch)
                 self.scheduler.remove_request(slot_request)
                 self.num_requests_in_progress -= 1

@@ -184,6 +184,9 @@ class DecodeDataBatch:
         self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.cuda()
         self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.cuda()
 
+        # NOTE: Important we do this otherwise memory leak!
+        request.free_cache()
+
         self.free_slots.discard(idx)
         self.occupied_slots.add(idx)
 
