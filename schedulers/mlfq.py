@@ -35,11 +35,10 @@ class SkipJoinMLFQ_scheduler:
         logging.basicConfig(level=logging.DEBUG)
 
 
-    def add_request(self, request, auto_score=None) -> Request:
+    def add_request(self, request, score=0) -> Request:
         # skip-join step
         # priority is set to the quantum larger than the first iteration quantum
         request_added = False
-        score = len(request.prompt) if not auto_score else auto_score
         for i, limit in enumerate(self.queue_limits):
             if score <= limit:
                 self.request_queues[i].append(
