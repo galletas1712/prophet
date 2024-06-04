@@ -1,4 +1,4 @@
 name: fcfs
 
-batch_size: 16
+batch_size: 8
 max_requests_in_scheduler: 16
