@@ -289,16 +289,6 @@ class PreemptibleSRPT_Scheduler:
         - Update metadata.
         """
 
-        # Clear requests in self.prev_batch that were removed.
-        # self.prev_batch = [
-        #     request
-        #     for request in self.prev_batch
-        #     if request.request_id in self.id_to_request
-        # ]
-
-        # Batch returned to user, initialized to the previously scheduled batch.
-        batch = [request for request in self.prev_batch]
-
         # Update scores and queue positions for previously scheduled requests.
         self.update_scores(self.prev_batch)
 

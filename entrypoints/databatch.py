@@ -210,8 +210,12 @@ class DecodeDataBatch:
     def get_free_slots(self):
         return list(self.free_slots)
 
-    def get_occupied_slots(self):
-        return list(self.occupied_slots)
+    def get_occupied_slots_avoiding_requests(self, request_ids: List[str]):
+        result = []
+        for idx in self.occupied_slots:
+            if self.requests[idx].request_id not in request_ids:
+                result.append(idx)
+        return result
 
     def get_requests_already_in(self):
         return [self.requests[idx].request_id for idx in self.occupied_slots]

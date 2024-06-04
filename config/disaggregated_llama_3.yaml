@@ -3,7 +3,7 @@ defaults:
   - coordinator: ray_coordinator
   - prefill_scheduler: srpt
   - decode_scheduler: preemptible_srpt
-  - request_generator: shareGPT_uniform_1_rps
+  - request_generator: shareGPT_1_rps
   - _self_
   - override hydra/hydra_logging: disabled  
   - override hydra/job_logging: disabled

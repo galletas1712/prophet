@@ -3,5 +3,4 @@ defaults:
 
 arrivals_per_sec: 1
 max_prompt_tokens: 300
-max_gen_len_low: 5
-max_gen_len_high: 450
+max_gen_len: 2048

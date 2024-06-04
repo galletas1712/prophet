@@ -98,13 +98,12 @@ class ShareGPTRequestGenerator:
                     self._append_prompt_suffix(prompt)
                 
                 prompt_tokens = self.corpus.formatter.encode_chat_completion(prompt)
-                max_gen_len = np.random.randint(self.config.max_gen_len_low, self.config.max_gen_len_high)
                 request_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(prompt_tokens)))
 
                 request = Request(
                     prompt,
                     prompt_tokens,
-                    max_gen_len,
+                    self.config.max_gen_len,
                     request_id,
                 )
 
