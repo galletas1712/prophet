@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, List, Any
 
@@ -25,45 +25,23 @@ class Request:
     max_gen_len: int
     request_id: str
 
-    idx_in_data_batch: Optional[int]
+    idx_in_data_batch: Optional[int] = None
 
-    stage: RequestStage
-    output_tokens: List[int]
+    stage: RequestStage = RequestStage.PREFILL
+    output_tokens: List[int] = field(default_factory=list)
 
     # Populated when request stage set to DONE.
-    output: Optional[str | Any]
+    output: Optional[str | Any] = None
 
     # Populated on prefill
-    cache_k: Optional[torch.Tensor]
-    cache_v: Optional[torch.Tensor]
+    cache_k: Optional[torch.Tensor] = None
+    cache_v: Optional[torch.Tensor] = None
+
+    # For profiling
+    estimated_token_length: Optional[int] = None
 
     # For benchmarking
-    benchmark_metrics: RequestBenchmarkMetrics
-
-    def __init__(
-        self,
-        prompt: str | Any,
-        prompt_tokens: List[int],
-        max_gen_len: int,
-        request_id: str,
-    ):
-        self.prompt = prompt
-        self.prompt_tokens = prompt_tokens
-        self.max_gen_len = max_gen_len
-        self.request_id = request_id
-
-        self.idx_in_data_batch = None
-
-        self.stage = RequestStage.PREFILL
-        self.output_tokens = []
-
-        self.output = None
-
-        self.cache_k = None
-        self.cache_v = None
-
-        self.benchmark_metrics = RequestBenchmarkMetrics(request_id)
-
+    benchmark_metrics: RequestBenchmarkMetrics = field(default_factory=RequestBenchmarkMetrics)
 
     def free_cache(self):
         del self.cache_k

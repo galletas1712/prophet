@@ -4,9 +4,10 @@ batch_size: 16
 min_batches_before_preemption: 4
 max_batches_before_promotion: 256
 max_requests_in_scheduler: 32
-scoring_method: prefill_length
+scoring_method: estimated_rpt
 
 initial_score: 0
-parse_error_score: 0
+tokens_per_word: 3
+fcr_ratio: 1.2
 tokenizer_path: /home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model
 num_tokens_before_scoring: 5

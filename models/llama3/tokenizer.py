@@ -250,22 +250,28 @@ class LlamaFormatter:
         return self._encode_dialog_prompt(dialog)
 
     def decode_chat_completion(
-        self, tokens: torch.Tensor, token_logprobs: Optional[torch.Tensor],
+        self,
+        tokens: torch.Tensor,
+        strip_estimate: bool,
+        token_logprobs: Optional[torch.Tensor],
     ):
+        content = self.tokenizer.decode(tokens)
+        if strip_estimate:
+            content = content[content.find('\n'):].lstrip()
         if token_logprobs is not None:
             return {
                 "generation": {
                     "role": "assistant",
-                    "content": self.tokenizer.decode(tokens),
+                    "content": content,
                 },
-                "tokens": [self.tokenizer.decode([x]) for x in tokens],
+                "tokens": [self.tokenizer.decode([x]) for x in tokens],  # NOTE: This will include estimate
                 "logprobs": token_logprobs,
             }
 
         return {
             "generation": {
                 "role": "assistant",
-                "content": self.tokenizer.decode(tokens),
+                "content": content,
             },
         }
 

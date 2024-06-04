@@ -5,8 +5,7 @@ import time
 
 class RequestBenchmarkMetrics:
 
-    def __init__(self, request_id: str):
-        self.request_id = request_id
+    def __init__(self):
         self.timestamps = [time.time()]
         self.request_finished = False
         self.gen_len = 0
@@ -33,11 +32,7 @@ class RequestBenchmarkMetrics:
 
         self.stats_trunc = list(map("{:.3f}".format, [self.JCT, self.TTFT, self.TPOT, self.TTFPT, self.TPODT]))
         self.request_finished = True
-
-    def __str__(self):
-        assert self.request_finished
-        return f"JCT: {self.JCT:.3f}, TTFT: {self.TTFT:.3f}, TPOT: {self.TPOT:.3f}, TTFPT: {self.TTFPT:.3f}, TPODT: {self.TPODT:.3f}"
     
-    def to_csv_row(self):
+    def get_stats_list(self):
         assert self.request_finished
-        return ','.join([self.request_id, str(self.gen_len)] + self.stats_trunc) + '\n'
+        return [str(self.gen_len)] + self.stats_trunc

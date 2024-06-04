@@ -16,17 +16,20 @@ import torch
 @ray.remote(num_cpus=2)
 class OutputConsumer:
 
-    def __init__(self, config, output_dir: str, input_queue: Queue):
+    def __init__(self, config, estimate_decode_lengths: bool, output_dir: str, input_queue: Queue):
         self.config = config
+        self.estimate_decode_lengths = estimate_decode_lengths
         self.input_queue = input_queue
         self.benchmark_results_file = os.path.join(
             output_dir, 'benchmark_results.csv')
+        
+        print("Estimate decode lengths:", self.estimate_decode_lengths  )
 
         self.tokenizer = Tokenizer(config.model.tokenizer_path)
         self.formatter = LlamaFormatter(self.tokenizer)
 
         f = open(self.benchmark_results_file, 'w')
-        f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
+        f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT,estimated_output_len,actual_output_len\n')
         f.close()
 
         print("Started Output Consumer!")
@@ -34,21 +37,33 @@ class OutputConsumer:
     def run(self):
         while True:
             request = self.input_queue.get(block=True)
-            request.output = self.formatter.decode_chat_completion(request.output_tokens, None)
+            request.output = self.formatter.decode_chat_completion(
+                request.output_tokens,
+                self.estimate_decode_lengths,
+                None,
+            )
             print(f"OutputConsumer received request {request.request_id}")
             # Remove length prediction prefix from output
-            if hasattr(self.config.decode_scheduler, 'scoring_method') and self.config.decode_scheduler.scoring_method == 'estimated_rpt':
-                prefixed_content = request.output['generation']['content'] 
-                request.output['generation']['content'] = prefixed_content[prefixed_content.find('\n'):].lstrip()
-            print(
-                f"Max Gen Len: {request.max_gen_len}, Output: {request.output}")
+            
+            if self.estimate_decode_lengths:
+                print(
+                    f"Estimated Output Tokens: {request.estimated_token_length}, Actual Output Tokens: {len(request.output_tokens)}, Output: {request.output}")
+            else:
+                print(
+                    f"Output tokens: {len(request.output_tokens)}, Output: {request.output}")
+
 
             # Write benchmarks
             request.benchmark_metrics.finished_request()
+            csv_row = ','.join(
+                [str(request.request_id)] +
+                request.benchmark_metrics.get_stats_list() +
+                [str(request.estimated_token_length), str(len(request.output_tokens))]
+            ) + '\n'
 
             # Write benchmark results to file
             f = open(self.benchmark_results_file, 'a')
-            f.write(request.benchmark_metrics.to_csv_row())
+            f.write(csv_row)
             f.close()
 
 
@@ -77,8 +92,11 @@ def driver(config):
     pending_queue = Queue(maxsize=max_pending_queue_size)
     result_queue = Queue()
 
+    estimate_decode_lengths = hasattr(config.decode_scheduler, 'scoring_method') and config.decode_scheduler.scoring_method == 'estimated_rpt'
+
     request_generator = ShareGPTRequestGenerator.remote(
         config.request_generator,
+        estimate_decode_lengths,
         config.model.tokenizer_path,
         request_queue
     )
@@ -100,6 +118,7 @@ def driver(config):
     ]
     output_consumer = OutputConsumer.remote(
         config,
+        estimate_decode_lengths,
         hydra.core.hydra_config.HydraConfig.get().runtime.output_dir,
         result_queue,
     )

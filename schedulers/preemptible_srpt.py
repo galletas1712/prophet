@@ -1,10 +1,11 @@
+import re
+
 from sortedcontainers import SortedKeyList
 from typing import List
 
 from entrypoints.api import Request, RequestStage
+from models.llama3.tokenizer import Tokenizer
 from schedulers.utils import register_scheduler
-
-from models.llama3.tokenizer import Tokenizer, LlamaFormatter
 
 
 @register_scheduler("preemptible_srpt")
@@ -12,14 +13,14 @@ class PreemptibleSRPT_Scheduler:
     def __init__(
         self,
         batch_size,
-        min_batches_before_preemption=4,
-        max_batches_before_promotion=256,
-        scoring_method="prefill_length",
-        initial_score=0,               # Needed for EstimatedRPT_Scorer.
-        tokens_per_word=3,             # Needed for EstimatedRPT_Scorer.
-        fcr_ratio = 1.2,               # Needed for EstimatedRPT_Scorer.
-        tokenizer_path="",             # Needed for EstimatedRPT_Scorer.
-        num_tokens_before_scoring=5,   # Needed for EstimatedRPT_Scorer.
+        min_batches_before_preemption,
+        max_batches_before_promotion,
+        scoring_method,
+        initial_score,               # Needed for EstimatedRPT_Scorer.
+        tokens_per_word,             # Needed for EstimatedRPT_Scorer.
+        fcr_ratio,               # Needed for EstimatedRPT_Scorer.
+        tokenizer_path,             # Needed for EstimatedRPT_Scorer.
+        num_tokens_before_scoring,   # Needed for EstimatedRPT_Scorer.
         **kwargs,
     ) -> None:
 
@@ -81,25 +82,31 @@ class PreemptibleSRPT_Scheduler:
             if len(request.output_tokens) < self.num_tokens_before_scoring:
                 return self.initial_score
             
-            if request.request_id in self.request_scores:
-                return self.request_scores[request.request_id]
-            
             score_str = self.tokenizer.decode(
                 request.output_tokens[:self.num_tokens_before_scoring]
             )
 
             if "\n" not in score_str:
-                return self.parse_error_score
+                return request.max_gen_len
             
             length_estimate = score_str.split("\n")[0].strip()
-            if "words" in length_estimate:
-                length_estimate = length_estimate.split("words")[0].strip()
-            if length_estimate and length_estimate.isdigit():
-                # Take minimum with max_gen_len to take into account truncation.
-                length_estimate = min(int(length_estimate) * self.tokens_per_word, request.max_gen_len)
-                return length_estimate
-            else:
+
+            # Finds the first contiguous substring of digits
+            match = re.search(r'\d+', length_estimate)
+            if not match:
                 return request.max_gen_len
+            
+            length_estimate = match.group()
+            assert length_estimate
+
+            if not length_estimate.isdigit():
+                return request.max_gen_len
+            
+            # Now we know that length_estimate is for sure a number
+            # NOTE: we take minimum with max_gen_len to take into account truncation.
+            length_estimate = min(int(length_estimate) * self.tokens_per_word, request.max_gen_len)
+            request.estimated_token_length = length_estimate
+            return length_estimate
         
         return None
 
