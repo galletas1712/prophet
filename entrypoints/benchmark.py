@@ -5,7 +5,8 @@ import time
 
 class RequestBenchmarkMetrics:
 
-    def __init__(self):
+    def __init__(self, request_id: str):
+        self.request_id = request_id
         self.timestamps = [time.time()]
         self.request_finished = False
         self.gen_len = 0
@@ -39,4 +40,4 @@ class RequestBenchmarkMetrics:
     
     def to_csv_row(self):
         assert self.request_finished
-        return ','.join([str(self.gen_len)] + self.stats_trunc) + '\n'
+        return ','.join([self.request_id, str(self.gen_len)] + self.stats_trunc) + '\n'

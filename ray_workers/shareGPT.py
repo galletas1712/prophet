@@ -1,6 +1,7 @@
 import asyncio
 import json
 import ray
+import uuid
 
 import numpy as np
 
@@ -93,10 +94,15 @@ class ShareGPTRequestGenerator:
                 if self.prompt_suffix is not None and len(self.prompt_suffix) > 0:
                     self._append_prompt_suffix(prompt)
                 
+                prompt_tokens = self.corpus.formatter.encode_chat_completion(prompt)
+                max_gen_len = np.random.randint(self.config.max_gen_len_low, self.config.max_gen_len_high)
+                request_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(prompt_tokens)))
+
                 request = Request(
                     prompt,
-                    self.corpus.formatter.encode_chat_completion(prompt),
-                    np.random.randint(self.config.max_gen_len_low, self.config.max_gen_len_high)
+                    prompt_tokens,
+                    max_gen_len,
+                    request_id,
                 )
 
                 # Put into request queue. Block until queue is free

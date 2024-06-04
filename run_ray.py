@@ -26,7 +26,7 @@ class OutputConsumer:
         self.formatter = LlamaFormatter(self.tokenizer)
 
         f = open(self.benchmark_results_file, 'w')
-        f.write('gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
+        f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
         f.close()
 
         print("Started Output Consumer!")
