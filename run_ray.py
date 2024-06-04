@@ -32,7 +32,7 @@ class OutputConsumer:
         if self.estimate_decode_lengths:
             f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT,estimated_output_len,actual_output_len\n')
         else:
-            f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT,output_len\n')
+            f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
         f.close()
 
         print("Started Output Consumer!")
@@ -67,8 +67,7 @@ class OutputConsumer:
             else:
                 csv_row = ','.join(
                     [str(request.request_id)] +
-                    request.benchmark_metrics.get_stats_list() +
-                    [str(len(request.output_tokens))]
+                    request.benchmark_metrics.get_stats_list()
                 ) + '\n'
 
 

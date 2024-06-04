@@ -1,0 +1,6 @@
+defaults:
+- shareGPT_base
+
+arrivals_per_sec: 0.5
+max_prompt_tokens: 300
+max_gen_len: 2048

@@ -2,8 +2,8 @@ defaults:
   - model: llama_3
   - coordinator: ray_coordinator
   - prefill_scheduler: srpt
-  - decode_scheduler: preemptible_srpt
-  - request_generator: shareGPT_1_rps
+  - decode_scheduler: skip_join_mlfq
+  - request_generator: shareGPT_0.5_rps
   - _self_
   - override hydra/hydra_logging: disabled  
   - override hydra/job_logging: disabled
