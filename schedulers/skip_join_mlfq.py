@@ -12,7 +12,7 @@ class MLFQRequestInfo:
     last_batched_time: int
 
 @register_scheduler("skip_join_mlfq")
-class SkipJoinMLFQ_scheduler:
+class SkipJoinMLFQ_Scheduler:
     def __init__(
         self,
         batch_size,
@@ -21,7 +21,7 @@ class SkipJoinMLFQ_scheduler:
         starvation_limit,
         **kwargs,
     ) -> None:
-        super(SkipJoinMLFQ_scheduler, self).__init__()
+        super(SkipJoinMLFQ_Scheduler, self).__init__()
         self.batch_size = batch_size
         self.starvation_limit = starvation_limit
         self.now = 0
@@ -93,7 +93,6 @@ class SkipJoinMLFQ_scheduler:
                 if (self.now - request_info.last_batched_time) >= self.starvation_limit:
                     self._reset_request(queue_idx, req_idx)
                     break
-
         return batch
 
     def _move_request_to_lower_queue(self, queue_idx, req_idx):
@@ -110,12 +109,12 @@ class SkipJoinMLFQ_scheduler:
         request_info.iteration_number = 0
         self.request_queues[0].append(request_info)
 
-    def remove_request(self, finished_request_id):
+    def remove_request(self, request: Request):
         for i in range(self.num_queues):
             for req_idx, request_info in enumerate(self.request_queues[i]):
-                if request_info.request.request_id == finished_request_id:
+                if request_info.request.request_id == request.request_id:
                     self.request_queues[i].pop(req_idx)
                     return
         raise ValueError(
-            f"Request with id {finished_request_id} not found in any queue"
+            f"Request with id {request.request_id} not found in any queue"
         )

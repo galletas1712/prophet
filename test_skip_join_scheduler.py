@@ -1,5 +1,5 @@
 from entrypoints.api import Request
-from schedulers.mlfq import SkipJoinMLFQ_scheduler
+from schedulers.mlfq import SkipJoinMLFQ_Scheduler
 from entrypoints.api import RequestStage
 
 
@@ -24,7 +24,7 @@ def test_preemption_promotion_thresholds():
     """
     print(f"---- TESTING MLFQ ----\n")
 
-    scheduler = SkipJoinMLFQ_scheduler(
+    scheduler = SkipJoinMLFQ_Scheduler(
         batch_size=1,
         num_queues=4,
         queue_limits=[2, 4, 8, 16],

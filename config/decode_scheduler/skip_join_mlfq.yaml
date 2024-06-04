@@ -1,0 +1,8 @@
+name: skip_join_mlfq
+
+batch_size: 2
+num_queues: 4
+queue_limits: [32, 64, 128, 256]
+starvation_limit: 512
+max_requests_in_scheduler: 32
+
