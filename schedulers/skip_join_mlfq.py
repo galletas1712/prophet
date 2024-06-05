@@ -3,7 +3,6 @@ from dataclasses import dataclass
 
 from entrypoints.api import Request, RequestStage
 from schedulers.utils import register_scheduler
-import logging
 
 @dataclass
 class MLFQRequestInfo:
@@ -31,15 +30,10 @@ class SkipJoinMLFQ_Scheduler:
         self.queue_limits = queue_limits
         assert len(queue_limits) == num_queues
 
-        self.logger = logging.getLogger("skip_join_mlfq")
-        logging.basicConfig(level=logging.DEBUG)
-
-
-    def add_request(self, request, auto_score=None) -> Request:
+    def add_request(self, request, score=0) -> Request:
         # skip-join step
         # priority is set to the quantum larger than the first iteration quantum
         request_added = False
-        score = len(request.prompt) if not auto_score else auto_score
         for i, limit in enumerate(self.queue_limits):
             if score <= limit:
                 self.request_queues[i].append(
@@ -71,7 +65,7 @@ class SkipJoinMLFQ_Scheduler:
                     continue
 
                 # preemption
-                if request_info.iteration_number != 0 and request_info.iteration_number % self.queue_limits[queue_idx] == 0:
+                if queue_idx < self.num_queues - 1 and request_info.iteration_number != 0 and request_info.iteration_number % self.queue_limits[queue_idx] == 0:
                     self._move_request_to_lower_queue(queue_idx, req_idx)
                     continue
 
@@ -99,22 +93,26 @@ class SkipJoinMLFQ_Scheduler:
         request_info = self.request_queues[queue_idx].pop(req_idx)
         if queue_idx == self.num_queues - 1:
             self.request_queues[queue_idx].append(request_info)
+            print(f"Can't move request {request_info.request.request_id} to any lower")
         else:
             self.request_queues[queue_idx + 1].append(request_info)
+            print(f"Moving request {request_info.request.request_id} to queue {queue_idx + 1}")
 
     def _reset_request(self, queue_idx, req_idx):
         request_info = self.request_queues[queue_idx].pop(req_idx)
         assert (self.now - request_info.last_batched_time) >= self.starvation_limit
+        print(f"Resetting request {request_info.request.request_id} from queue {queue_idx} to 0")
         request_info.last_batched_time = self.now
         request_info.iteration_number = 0
         self.request_queues[0].append(request_info)
 
-    def remove_request(self, request: Request):
+    def remove_request(self, request):
+        finished_request_id = request.request_id
         for i in range(self.num_queues):
             for req_idx, request_info in enumerate(self.request_queues[i]):
                 if request_info.request.request_id == request.request_id:
                     self.request_queues[i].pop(req_idx)
                     return
         raise ValueError(
-            f"Request with id {request.request_id} not found in any queue"
+            f"Request with id {finished_request_id} not found in any queue"
         )

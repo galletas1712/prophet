@@ -54,6 +54,8 @@ class Decoder:
         request.cache_k = request.cache_k.cuda()
         request.cache_v = request.cache_v.cuda()
 
+        request.max_gen_len = min(self.config.model.max_seq_len - len(request.prompt_tokens), request.max_gen_len)
+
         return request
 
     async def run(self):

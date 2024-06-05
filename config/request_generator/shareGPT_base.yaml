@@ -1,2 +1,2 @@
 corpus_path: /home/ubuntu/shareGPT.json
-prompt_suffix: "Before responding to the above instruction, you have to predict the length of your response. Print only the estimated number of words in your response in the first line. Then change to a new line to respond to the instruction."
+prompt_suffix: "Before responding to the above instruction, you must estimate whether your response will be short or long. Write 'short' to the first line if you anticipate your response to be less than 100 tokens long. Otherwise, write 'long' tothe first line if over 100 tokens long. Then, change to a new line to respond to the original instruction."

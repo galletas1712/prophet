@@ -29,7 +29,10 @@ class OutputConsumer:
         self.formatter = LlamaFormatter(self.tokenizer)
 
         f = open(self.benchmark_results_file, 'w')
-        f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT,estimated_output_len,actual_output_len\n')
+        if self.estimate_decode_lengths:
+            f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT,estimated_output_len,actual_output_len\n')
+        else:
+            f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
         f.close()
 
         print("Started Output Consumer!")
@@ -55,11 +58,18 @@ class OutputConsumer:
 
             # Write benchmarks
             request.benchmark_metrics.finished_request()
-            csv_row = ','.join(
-                [str(request.request_id)] +
-                request.benchmark_metrics.get_stats_list() +
-                [str(request.estimated_token_length), str(len(request.output_tokens))]
-            ) + '\n'
+            if self.estimate_decode_lengths:
+                csv_row = ','.join(
+                    [str(request.request_id)] +
+                    request.benchmark_metrics.get_stats_list() +
+                    [str(request.estimated_token_length), str(len(request.output_tokens))]
+                ) + '\n'
+            else:
+                csv_row = ','.join(
+                    [str(request.request_id)] +
+                    request.benchmark_metrics.get_stats_list()
+                ) + '\n'
+
 
             # Write benchmark results to file
             f = open(self.benchmark_results_file, 'a')

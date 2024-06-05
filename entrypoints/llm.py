@@ -59,25 +59,27 @@ class LLM:
 
         #  Get set of slots we can replace
         free_slots = self.decode_batch.get_free_slots()
-        requests_already_in = self.decode_batch.get_requests_already_in()
-        assert len(requests_already_in) + \
+        requests_already_in_ids = self.decode_batch.get_requests_already_in()
+        assert len(requests_already_in_ids) + \
             len(free_slots) == len(self.decode_batch.requests)
 
         request_batch = self.scheduler.schedule(RequestStage.DECODE)
         # print("Scheduling decodes with prompt lengths", [(req.prompt, len(req.prompt)) for req in request_batch])
 
         # If there's nothing to process
-        if len(request_batch) == 0 and len(requests_already_in) == 0:
+        if len(request_batch) == 0 and len(requests_already_in_ids) == 0:
             return {}, []
 
         # Allocate free decode batch slots for new requests that just finished prefilling
         new_requests = list(filter(
-            lambda r: r.request_id not in requests_already_in, request_batch))
+            lambda r: r.request_id not in requests_already_in_ids, request_batch))
 
         # Preempt slots if we have to
-        occupied_slots = self.decode_batch.get_occupied_slots()
+        request_batch_ids = [req.request_id for req in request_batch]
+        preempt_slots = self.decode_batch.get_occupied_slots_avoiding_requests(request_batch_ids)
         requests_to_preempt_with = new_requests[len(free_slots):]
-        for occupied_slot_idx, new_request in zip(occupied_slots, requests_to_preempt_with):
+
+        for occupied_slot_idx, new_request in zip(preempt_slots, requests_to_preempt_with):
             print(
                 f"Preempting slot {occupied_slot_idx} kicking out {self.decode_batch.requests[occupied_slot_idx].request_id} for request {new_request.request_id}")
             self.decode_batch.preempt_slot(occupied_slot_idx, new_request)
