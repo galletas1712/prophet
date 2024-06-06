@@ -1,4 +1,4 @@
 defaults:
 - shareGPT_base
 
-arrivals_per_sec: 1
+arrivals_per_sec: 8
