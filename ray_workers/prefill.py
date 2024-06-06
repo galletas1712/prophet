@@ -52,10 +52,6 @@ class KVCacheManager:
             )
             del request.cache_k
             del request.cache_v
-
-            # NOTE: Important to free reference here
-            del prefill_data_batch.cache_k
-            del prefill_data_batch.cache_v
         
     def pop_request(self, request_id: str):
         return self.kv_cache.pop_item(request_id)
@@ -134,6 +130,9 @@ class Prefiller:
             
             # Add reference of each request's prefill KV cache to data batch
             self.kv_cache_manager.new_prefill_batch(prefill_data_batch)
+            
+            del prefill_data_batch.cache_k
+            del prefill_data_batch.cache_v
 
             # Log successful prefill + immediately remove from prefill scheduler
             # as no more prefills for these requests will be done.

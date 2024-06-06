@@ -1,6 +1,6 @@
 import torch
 import ray
-from entrypoints.api import WorkerType
+from entrypoints.api import RequestStage, WorkerType
 from entrypoints.databatch import PrefillDataBatch
 from entrypoints.llm import LLM
 from ray.util.queue import Queue, Empty
@@ -77,6 +77,9 @@ class Decoder:
             
             # Pull KV caches from prefiller and add to scheduler
             for request in requests_to_add:
+                if request.stage is not RequestStage.DECODE:
+                    raise ValueError(f"Decoder should only receive decode requests! Received: {request.stage}. Try setting max_prompt_len lower.")
+
                 self.kv_cache_buffer = torch.zeros(
                     (2, len(request.prompt_tokens), self.model_args.n_layers, self.model_args.dim),
                     dtype=torch.bfloat16

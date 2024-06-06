@@ -32,9 +32,9 @@ class OutputConsumer:
 
         f = open(self.benchmark_results_file, 'w')
         if self.estimate_decode_lengths:
-            f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT,estimated_output_len,actual_output_len\n')
+            f.write('request_hash,prompt_len,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT,estimated_output_len,actual_output_len\n')
         else:
-            f.write('request_hash,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
+            f.write('request_hash,prompt_len,gen_len,JCT,TTFT,TPOT,TTFPT,TPODT\n')
         f.close()
 
         print("Started Output Consumer!")
@@ -62,13 +62,13 @@ class OutputConsumer:
             request.benchmark_metrics.finished_request()
             if self.estimate_decode_lengths:
                 csv_row = ','.join(
-                    [str(request.request_id)] +
+                    [str(request.request_id), str(len(request.prompt_tokens))] +
                     request.benchmark_metrics.get_stats_list() +
                     [str(request.estimated_token_length), str(len(request.output_tokens))]
                 ) + '\n'
             else:
                 csv_row = ','.join(
-                    [str(request.request_id)] +
+                    [str(request.request_id), str(len(request.prompt_tokens))] +
                     request.benchmark_metrics.get_stats_list()
                 ) + '\n'
 
