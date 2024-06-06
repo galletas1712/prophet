@@ -1,3 +1,4 @@
+import gc
 import torch
 import ray
 from entrypoints.api import RequestStage, WorkerType
@@ -88,7 +89,10 @@ class Decoder:
                 # TODO: support more than 1 prefiller
                 ray.get(self.coordinator.send_tensor.remote("prefiller#0", f"{self.name}", request.request_id))
                 request.cache_k, request.cache_v = torch.unbind(self.kv_cache_buffer, dim=0)
+
                 del self.kv_cache_buffer
+                gc.collect()
+                torch.cuda.empty_cache()
 
                 print(f"Decoder received request {request.request_id} pending scheduling...")
                 self.llm.add_request(request)
