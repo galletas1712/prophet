@@ -11,3 +11,4 @@ global_generation_params:
   top_p: 0.9
   logprobs: False
   echo: False
+  generate_past_eos: False

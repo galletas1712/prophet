@@ -25,6 +25,8 @@ class Request:
     max_gen_len: int
     request_id: str
 
+    oracle_request_len: Optional[int] = None
+
     idx_in_data_batch: Optional[int] = None
 
     stage: RequestStage = RequestStage.PREFILL

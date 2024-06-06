@@ -78,7 +78,11 @@ class ShareGPTRequestGenerator:
 
     def load_corpus(self):
         print("Loading shareGPT corpus...")
-        self.corpus = ShareGPTCorpus(self.config.corpus_path, self.tokenizer_path, self.config.max_prompt_tokens)
+        self.corpus = ShareGPTCorpus(
+            self.config.corpus_path,
+            self.tokenizer_path,
+            self.config.max_prompt_tokens
+        )
         print("Done loading shareGPT corpus!")
     
     def _append_prompt_suffix(self, prompt):
@@ -100,14 +104,30 @@ class ShareGPTRequestGenerator:
                 prompt_tokens = self.corpus.formatter.encode_chat_completion(prompt)
                 request_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(prompt_tokens)))
 
+                curr_max_gen_len = self.config.max_gen_len
+
+                if self.config.max_gen_len_range is not None:
+                    curr_max_gen_len = np.random.randint(
+                        *self.config.max_gen_len_range
+                    )
+
                 request = Request(
                     prompt,
                     prompt_tokens,
-                    self.config.max_gen_len,
+                    curr_max_gen_len,
                     request_id,
                 )
+                
+                oracle_len_noise = np.random.randint(
+                    -self.config.max_oracle_len_noise - 1,
+                    self.config.max_oracle_len_noise + 1
+                )
+                request.oracle_request_len = \
+                    curr_max_gen_len + oracle_len_noise
 
                 # Put into request queue. Block until queue is free
                 await self.request_queue.put_async(request)
 
-                print(f"Request {request.request_id} added to request queue")
+                print(
+                    f"Request {request.request_id} added to request queue with max_gen_len {curr_max_gen_len}"
+                )

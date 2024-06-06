@@ -21,6 +21,7 @@ class GlobalGenerationParams:
     top_p: float
     logprobs: bool
     echo: bool
+    generate_past_eos: bool
 
 
 class Llama:
@@ -194,8 +195,13 @@ class Llama:
 
             # If generation sample EOS or hits max seq len, sets request stage
             # to DONE and decodes request output tokens.
+            stop_due_to_eos = (
+                (not self.glob_params.generate_past_eos) and 
+                (curr_next_token in self.tokenizer.stop_tokens)
+            )
+
             if (
-                curr_next_token in self.tokenizer.stop_tokens
+                stop_due_to_eos
                 or len(request.output_tokens) == request.max_gen_len
                 or len(request.output_tokens) + len(request.prompt_tokens)
                 == self.model_args.max_seq_len

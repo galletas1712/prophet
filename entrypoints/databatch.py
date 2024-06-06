@@ -192,8 +192,10 @@ class DecodeDataBatch:
 
     def preempt_slot(self, idx: int, request: Request):
         old_request = self.requests[idx]
+    
         old_request.cache_k = self.cache_k[idx, :self.start_pos[idx] + 1].clone()
         old_request.cache_v = self.cache_v[idx, :self.start_pos[idx] + 1].clone()
+        
         self.clear_slot(idx)
         self.fill_slot(idx, request)
 

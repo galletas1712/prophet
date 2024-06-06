@@ -11,3 +11,4 @@ tokens_per_word: 3
 fcr_ratio: 2
 tokenizer_path: /home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model
 num_tokens_before_scoring: 16
+use_oracle_len: False

@@ -16,11 +16,12 @@ class PreemptibleSRPT_Scheduler:
         min_batches_before_preemption,
         max_batches_before_promotion,
         scoring_method,
-        initial_score,               # Needed for EstimatedRPT_Scorer.
-        tokens_per_word,             # Needed for EstimatedRPT_Scorer.
-        fcr_ratio,               # Needed for EstimatedRPT_Scorer.
+        initial_score,              # Needed for EstimatedRPT_Scorer.
+        tokens_per_word,            # Needed for EstimatedRPT_Scorer.
+        fcr_ratio,                  # Needed for EstimatedRPT_Scorer.
         tokenizer_path,             # Needed for EstimatedRPT_Scorer.
-        num_tokens_before_scoring,   # Needed for EstimatedRPT_Scorer.
+        num_tokens_before_scoring,  # Needed for EstimatedRPT_Scorer.
+        use_oracle_len,             # Needed for EstimatedRPT_Scorer.
         **kwargs,
     ) -> None:
 
@@ -69,6 +70,7 @@ class PreemptibleSRPT_Scheduler:
             self.num_tokens_before_scoring = num_tokens_before_scoring
             self.tokenizer = Tokenizer(tokenizer_path)
             self.fcr_ratio = fcr_ratio
+            self.use_oracle_len = use_oracle_len
 
             # Maps request id to predicted length. Does not change. Used for FCR.
             self.request_perceived_lengths = {}
@@ -79,6 +81,9 @@ class PreemptibleSRPT_Scheduler:
             return len(request.prompt_tokens)
         
         elif self.scoring_method == "estimated_rpt":
+            if self.use_oracle_len:
+                return request.oracle_request_len
+            
             if len(request.output_tokens) < self.num_tokens_before_scoring:
                 return self.initial_score
             

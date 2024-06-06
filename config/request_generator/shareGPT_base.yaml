@@ -2,3 +2,7 @@ corpus_path: /home/ubuntu/shareGPT.json
 prompt_suffix: "Before responding to the above instruction, you must estimate whether your response will be short or long. Write 'short' to the first line if you anticipate your response to be less than 100 tokens long. Otherwise, write 'long' tothe first line if over 100 tokens long. Then, change to a new line to respond to the original instruction."
 max_prompt_tokens: 950
 max_gen_len: 2048
+
+max_oracle_len_noise: 0
+max_gen_len_range: null
+# max_gen_len_range: [128, 1024]
