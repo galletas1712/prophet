@@ -3,4 +3,4 @@ name: srpt
 batch_size: 1
 max_requests_in_scheduler: 32
 scoring_method: prefill_length
-starvation_limit: 100 # in seconds, not tuned
+starvation_limit: 10 # in seconds, not tuned

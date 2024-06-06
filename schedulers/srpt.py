@@ -1,10 +1,8 @@
 from entrypoints.api import Request, RequestStage
 from typing import List
 from sortedcontainers import SortedDict
-from dataclasses import dataclass
 
 from schedulers.utils import register_scheduler
-import time
 
 
 # TODO: scoring method
@@ -18,6 +16,7 @@ class SRPTScheduler:
         self.requests = SortedDict()
 
         self.starvation_limit = starvation_limit
+        self.now = 0
 
     def add_request(self, request) -> Request:
         # NOTE: Using prompt token length for now (even for decode)
@@ -26,28 +25,24 @@ class SRPTScheduler:
         # storage: (priority, prompt length, request_id) -> (request, added_time or last_batched_time)
         # priority either 1 (default) or 0 (promoted after starvation)
         self.requests[(1, len(request.prompt_tokens),
-                       request.request_id)] = (request, time.time())
+                       request.request_id)] = (request, self.now)
 
     def schedule(self, stage: RequestStage) -> List[Request]:
+        self.now += 1
         batch = []
-
         for _, (request, _) in self.requests.items():
             assert request.stage is not RequestStage.DONE
             if request.stage is not stage:
                 continue
-            batch.append(request) 
-            # no need to update last time as always complet
+            batch.append(request)
             if len(batch) == self.batch_size:
                 break
-        
-        print([r.request_id for r in batch])
 
         if self.starvation_limit is not None:
             for _, (request, added_time) in self.requests.items():
-                if time.time() - added_time > self.starvation_limit:
+                if self.now - added_time >= self.starvation_limit:
                     self.remove_request(request)
-                    self.requests[(0, len(request.prompt_tokens), request.request_id)] = (request, time.time())
-                    print(f"Promoted starved request {request.request_id}")
+                    self.requests[(0, len(request.prompt_tokens), request.request_id)] = (request, self.now)
 
         return batch
 
