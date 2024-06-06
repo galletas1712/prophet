@@ -3,7 +3,7 @@ name: llama_3
 ckpt_dir: /home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct
 tokenizer_path: /home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model
 
-max_seq_len: 512
+max_seq_len: 1024
 model_parallel_size: 1
 
 global_generation_params:
