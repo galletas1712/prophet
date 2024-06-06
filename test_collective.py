@@ -133,6 +133,7 @@ def driver(config):
     coordinator = Coordinator.remote(rank_mapping)
     prefillers = [
         Prefiller.options(name=f"prefiller#{i}", max_concurrency=2).remote(
+            f"prefiller#{i}",
             config,
             request_queue,
             pending_queue,

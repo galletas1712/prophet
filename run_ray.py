@@ -7,8 +7,10 @@ from models.llama3.tokenizer import LlamaFormatter, Tokenizer
 from ray_workers.decode import Decoder
 from ray_workers.prefill import Prefiller
 from ray_workers.shareGPT import ShareGPTRequestGenerator
+from ray_workers.consumer_test import ConsumerTest
 from ray.util.queue import Queue
 import ray
+import ray.util.collective as collective
 import hydra
 import torch
 
@@ -76,6 +78,18 @@ class OutputConsumer:
             f.write(csv_row)
             f.close()
 
+@ray.remote
+class Coordinator:
+    def __init__(self, rank_mapping):
+        self.rank_mapping = rank_mapping
+
+    def send_tensor(self, sender_name, receiver_name, request_id):
+        sender = ray.get_actor(sender_name)
+        receiver = ray.get_actor(receiver_name)
+        ray.get([
+            sender.send_kv.remote(request_id=request_id, target_rank=self.rank_mapping[receiver_name]),
+            receiver.receive_kv.remote(src_rank=self.rank_mapping[sender_name])])
+
 
 @hydra.main(
     config_path="config/",
@@ -104,14 +118,25 @@ def driver(config):
 
     estimate_decode_lengths = hasattr(config.decode_scheduler, 'scoring_method') and config.decode_scheduler.scoring_method == 'estimated_rpt'
 
+    # TODO: change SIGNIFICANTTLY
+    world_size = config.coordinator.num_prefill_workers + config.coordinator.num_decode_workers
+    ranks = list(range(world_size))
+    rank_mapping = {}
+    for i in range(0, config.coordinator.num_prefill_workers):
+        rank_mapping[f"prefiller#{i}"] = i
+    for i in range(0, config.coordinator.num_decode_workers):
+        rank_mapping[f"decoder#{i}"] = i + config.coordinator.num_prefill_workers
+
     request_generator = ShareGPTRequestGenerator.remote(
         config.request_generator,
         estimate_decode_lengths,
         config.model.tokenizer_path,
         request_queue
     )
+    coordinator = Coordinator.remote(rank_mapping)
     prefillers = [
-        Prefiller.options(name=f"prefiller#{i}").remote(
+        Prefiller.options(name=f"prefiller#{i}", max_concurrency=2).remote(
+            f"prefiller#{i}",
             config,
             request_queue,
             pending_queue,
@@ -119,25 +144,34 @@ def driver(config):
         for i in range(config.coordinator.num_prefill_workers)
     ]
     decoders = [
-        Decoder.options(name=f"decoder#{i}").remote(
+        Decoder.options(name=f"decoder#{i}", max_concurrency=2).remote(
+            f"decoder#{i}",
             config,
             pending_queue,
             result_queue,
+            coordinator
         )
         for i in range(config.coordinator.num_decode_workers)
     ]
-    output_consumer = OutputConsumer.remote(
+    output_consumer = OutputConsumer.options(name=f"output_consumer").remote(
         config,
         estimate_decode_lengths,
         hydra.core.hydra_config.HydraConfig.get().runtime.output_dir,
-        result_queue,
+        result_queue
+    )
+
+    # Create the collective group
+    collective.create_collective_group(
+        [*prefillers, *decoders],
+        world_size=world_size,
+        ranks=ranks
     )
 
     # Wait for all actors to initialize
     ray.get([
         request_generator.load_corpus.remote(),
-        *[prefiller.load_llm.remote() for prefiller in prefillers],
-        *[decoder.load_llm.remote() for decoder in decoders],
+        *[prefiller.setup.remote() for prefiller in prefillers],
+        *[decoder.setup.remote() for decoder in decoders],
     ])
 
     # Wait for all actors to terminate

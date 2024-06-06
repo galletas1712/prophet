@@ -65,6 +65,7 @@ class KVCacheManager:
 class Prefiller:
     def __init__(
         self,
+        name,
         config,
         input_queue: Queue,
         output_queue: Queue,
@@ -72,6 +73,7 @@ class Prefiller:
         torch.set_default_device("cuda")
         self.rank = ray.get_gpu_ids()[0]
 
+        self.name = name
         self.config = config
         self.input_queue = input_queue
         self.output_queue = output_queue
@@ -82,21 +84,20 @@ class Prefiller:
         self.kv_cache_manager = KVCacheManager(config.prefill_scheduler.batch_size)
     
     def setup(self):
-        print(f"Prefiller(rank={self.rank}) initializing LLM...")
+        print(f"{self.name} initializing LLM...")
         self.llm = LLM(
             self.config.model,
             self.config.prefill_scheduler,
             self.config.seed,
             worker_type=WorkerType.PREFILL,
         )
-        print(f"Prefiller(rank={self.rank}) done initializing LLM!")
+        print(f"{self.name} done initializing LLM!")
 
     def __repr__(self):
-        return f"Prefiller(rank={self.rank})"
+        return self.name
 
     def send_kv(self, request_id: str, target_rank: int):
         kv_cache = self.kv_cache_manager.pop_request(request_id)
-        print(kv_cache.shape)
         assert(kv_cache.dtype == torch.bfloat16)
         collective.send(kv_cache, target_rank)
         torch.cuda.synchronize()
