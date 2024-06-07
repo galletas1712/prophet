@@ -134,6 +134,9 @@ class Prefiller:
             del prefill_data_batch.cache_k
             del prefill_data_batch.cache_v
 
+            gc.collect()
+            torch.cuda.empty_cache()
+
             # Log successful prefill + immediately remove from prefill scheduler
             # as no more prefills for these requests will be done.
             for request in prefill_data_batch.requests:

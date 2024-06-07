@@ -1,9 +1,9 @@
 name: preemptible_srpt
 
-batch_size: 8
+batch_size: 16
 min_batches_before_preemption: 4
 max_batches_before_promotion: 256
-max_requests_in_scheduler: 16
+max_requests_in_scheduler: 32
 scoring_method: estimated_rpt
 
 initial_score: 0
