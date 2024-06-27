@@ -59,7 +59,7 @@ def setup(source_device, target_device, dtype):
 
 def gpu2gpu_transfer(source_device, target_device, dtype=torch.bfloat16):
     source, target = setup(source_device, target_device, dtype)
-    byte_sizes = [1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
+    byte_sizes = [1, 16, 64, 1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
 
     bits = torch.finfo(dtype).bits
     for byte_size in byte_sizes:
