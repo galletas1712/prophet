@@ -101,14 +101,12 @@ def cpu_gpu_transfer_no_pin(dtype):
 
             start_time = time.time()
             tensor = tensor.to("cuda")  # NOTE: Can't use a non-blocking transfer but we wouldn't for benchmarking anyways
-            torch.cuda.synchronize()
             end_time = time.time()
             if i > 1:
                 cpu2gpu_times.append(end_time - start_time)
 
             start_time = time.time()
             tensor = tensor.to("cpu")
-            torch.cuda.synchronize()
             end_time = time.time()
             if i > 1:  # A few warmup iterations
                 gpu2cpu_times.append(end_time - start_time)
@@ -132,14 +130,12 @@ def cpu_gpu_transfer_pinned(dtype):
 
             start_time = time.time()
             tensor = tensor.to("cuda")  # NOTE: Use blocking transfer for benchmarking
-            torch.cuda.synchronize()
             end_time = time.time()
             if i > 1:
                 cpu2gpu_times.append(end_time - start_time)
 
             start_time = time.time()
             tensor = tensor.to("cpu")
-            torch.cuda.synchronize()
             end_time = time.time()
             if i > 1:  # A few warmup iterations
                 gpu2cpu_times.append(end_time - start_time)
@@ -149,5 +145,5 @@ def cpu_gpu_transfer_pinned(dtype):
 if __name__ == '__main__':
     dtype = torch.bfloat16
     gpu2gpu_transfer(0, 1, dtype)
-    cpu2gpu_transfer_no_pin(dtype)
-    cpu2gpu_transfer_pinned(dtype)
+    cpu_gpu_transfer_no_pin(dtype)
+    cpu_gpu_transfer_pinned(dtype)
