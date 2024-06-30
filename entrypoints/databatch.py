@@ -135,6 +135,7 @@ class DecodeDataBatch:
         dim: int,
         pad_token: int,
     ):
+        self.max_batch_size = max_batch_size
         self.pad_token = pad_token
 
         self.requests = [None for _ in range(max_batch_size)]
@@ -174,21 +175,40 @@ class DecodeDataBatch:
         prompt_len = len(request.prompt_tokens)
         output_len = len(request.output_tokens)
         self.input_tokens[idx] = torch.tensor(
-            request.output_tokens[-1:], dtype=torch.long, device="cuda")
+            request.output_tokens[-1:], dtype=torch.long, device="cuda")  # TODO: remove cuda device here?
         assert self.input_tokens[idx].shape[0] == 1
 
         # Only token we process
         self.start_pos[idx] = prompt_len + output_len - 1
 
         # Can't hurt to make sure it's in CUDA.
-        self.cache_k[idx, :request.cache_k.shape[0]] = request.cache_k.cuda()
-        self.cache_v[idx, :request.cache_v.shape[0]] = request.cache_v.cuda()
-
-        # NOTE: Important we do this otherwise memory leak!
-        request.free_cache()
+        self.cache_k[idx, :request.cache_k.shape[0]].copy_(request.cache_k)
+        self.cache_v[idx, :request.cache_v.shape[0]].copy_(request.cache_v)
 
         self.free_slots.discard(idx)
         self.occupied_slots.add(idx)
+
+    def batch_preempt_slots(self, indices: List[int], requests: List[Request]):
+        assert len(indices) == len(requests)
+        old_requests = [self.requests[idx] for idx in indices]
+        streams = [
+            torch.cuda.Stream() for _ in range(len(indices))
+        ]
+
+        torch.cuda.synchronize()
+        for i in range(len(indices)):
+            with torch.cuda.stream(streams[i]):
+                # TODO: check non-blocking for CUDA/not CUDA?
+                old_len = self.start_pos[indices[i]] + 1
+                old_requests[i].cache_k[:old_len].copy_(self.cache_k[indices[i], :old_len])
+                old_requests[i].cache_v[:old_len].copy_(self.cache_v[indices[i], :old_len])
+                self.cache_k[indices[i], :requests[i].cache_k.shape[0]].copy_(requests[i].cache_k)
+                self.cache_v[indices[i], :requests[i].cache_v.shape[0]].copy_(requests[i].cache_v)
+                self.cache_k[indices[i], requests[i].cache_k.shape[0]:old_len] = 0
+                self.cache_v[indices[i], requests[i].cache_v.shape[0]:old_len] = 0
+        torch.cuda.synchronize()
+        
+        # TODO: update other fields outside of KV cache
 
     def preempt_slot(self, idx: int, request: Request):
         old_request = self.requests[idx]
