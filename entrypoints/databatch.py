@@ -168,7 +168,6 @@ class DecodeDataBatch:
     def batch_preempt_slots(self, slots: List[int], new_requests: List[Request]):
         print(f"Batch preempting slots: indices = {slots}, requests = {[r.request_id for r in new_requests]}")
         assert len(slots) == len(new_requests)
-        old_requests = [self.requests[idx] for idx in slots]
         streams = [
             torch.cuda.Stream() for _ in range(len(slots))
         ]
