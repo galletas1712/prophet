@@ -88,7 +88,17 @@ class Decoder:
 
                 # TODO: support more than 1 prefiller
                 ray.get(self.coordinator.send_tensor.remote("prefiller#0", f"{self.name}", request.request_id))
-                request.cache_k, request.cache_v = torch.unbind(self.kv_cache_buffer, dim=0)
+                request.cache_k = torch.zeros(
+                    (self.config.model.max_seq_len, self.model_args.n_layers, self.model_args.dim),
+                    dtype=torch.bfloat16
+                ).cuda()
+                request.cache_v = torch.zeros(
+                    (self.config.model.max_seq_len, self.model_args.n_layers, self.model_args.dim),
+                    dtype=torch.bfloat16
+                ).cuda()
+                request.cache_k[:len(request.prompt_tokens)].copy_(self.kv_cache_buffer[0])
+                request.cache_v[:len(request.prompt_tokens)].copy_(self.kv_cache_buffer[1])
+                request.idx_in_data_batch = None
 
                 del self.kv_cache_buffer
                 gc.collect()

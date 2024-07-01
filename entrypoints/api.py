@@ -46,7 +46,4 @@ class Request:
     def free_cache(self):
         del self.cache_k
         del self.cache_v
-
-        # NOTE: Just for profiling purposes. Remove in production
         gc.collect()
-        torch.cuda.empty_cache()
