@@ -55,10 +55,21 @@ class Decoder:
         return self.name
     
     # NOTE: Assumes prefill is rank 0 for now
-    def receive_kv(self, src_rank):
-        collective.recv(self.kv_cache_buffer, src_rank)
+    def receive_k(self, src_rank, prompt_len):
+        tensor = self.kv_cache_buffer[0, :prompt_len, :, :]
+        print(f"Receiving K cache of size {tensor.shape}")
         torch.cuda.synchronize()
-        print("Received in function")
+        collective.recv(tensor, src_rank)
+        torch.cuda.synchronize()
+        # print("Received K cache")
+
+    def receive_v(self, src_rank, prompt_len):
+        tensor = self.kv_cache_buffer[1, :prompt_len, :, :]
+        print(f"Receiving V cache of size {tensor.shape}")
+        torch.cuda.synchronize()
+        collective.recv(tensor, src_rank)
+        torch.cuda.synchronize()
+        # print("Received V cache")
 
     def run(self):
         print(f"Starting on GPU {self.rank}")
@@ -81,28 +92,22 @@ class Decoder:
                 if request.stage is not RequestStage.DECODE:
                     raise ValueError(f"Decoder should only receive decode requests! Received: {request.stage}. Try setting max_prompt_len lower.")
 
+                # TODO: modify model config to all be in the same file
                 self.kv_cache_buffer = torch.zeros(
-                    (2, len(request.prompt_tokens), self.model_args.n_layers, self.model_args.dim),
-                    dtype=torch.bfloat16
-                ).cuda()
+                    (2, self.config.model.max_seq_len, self.model_args.n_layers, self.model_args.dim),
+                    dtype=torch.bfloat16,
+                    device="cuda"
+                )
 
                 # TODO: support more than 1 prefiller
-                ray.get(self.coordinator.send_tensor.remote("prefiller#0", f"{self.name}", request.request_id))
-                request.cache_k = torch.zeros(
-                    (self.config.model.max_seq_len, self.model_args.n_layers, self.model_args.dim),
-                    dtype=torch.bfloat16
-                ).cuda()
-                request.cache_v = torch.zeros(
-                    (self.config.model.max_seq_len, self.model_args.n_layers, self.model_args.dim),
-                    dtype=torch.bfloat16
-                ).cuda()
-                request.cache_k[:len(request.prompt_tokens)].copy_(self.kv_cache_buffer[0])
-                request.cache_v[:len(request.prompt_tokens)].copy_(self.kv_cache_buffer[1])
+                ray.get(self.coordinator.send_tensor.remote("prefiller#0", f"{self.name}", request.request_id, len(request.prompt_tokens)))
+
+                # Use unbind to set cache_k, cache_v to the same data_ptr as self.kv_cache_buffer
+                request.cache_k, request.cache_v = torch.unbind(self.kv_cache_buffer, dim=0)
                 request.idx_in_data_batch = None
 
+                # No need to GC kv_cache_buffer here, since it is GC'ed in Request.free_cache in llm.py
                 del self.kv_cache_buffer
-                gc.collect()
-                torch.cuda.empty_cache()
 
                 print(f"Decoder received request {request.request_id} pending scheduling...")
                 self.llm.add_request(request)

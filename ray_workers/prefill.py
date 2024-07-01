@@ -39,22 +39,22 @@ class KVCacheManager:
         # NOTE: There cannot be more than batch_size requests pending transfer
         # This is SEPARATE from the number of requests in the scheduler
         self.batch_size = batch_size
-        self.kv_cache = SizeLimitedThreadSafeDict(batch_size)
+        self.cache_k = SizeLimitedThreadSafeDict(batch_size)
+        self.cache_v = SizeLimitedThreadSafeDict(batch_size)
     
     def new_prefill_batch(self, prefill_data_batch: PrefillDataBatch):
         for request in prefill_data_batch.requests:
-            self.kv_cache.add_item(
-                request.request_id,
-                torch.stack([
-                    request.cache_k,
-                    request.cache_v
-                ])
-            )
+            self.cache_k.add_item(request.request_id, request.cache_k)
+            self.cache_v.add_item(request.request_id, request.cache_v)
             del request.cache_k
             del request.cache_v
         
-    def pop_request(self, request_id: str):
-        return self.kv_cache.pop_item(request_id)
+    def pop_request_cache_k(self, request_id: str):
+        return self.cache_k.pop_item(request_id)
+
+    def pop_request_cache_v(self, request_id: str):
+        return self.cache_v.pop_item(request_id)
+
 
 
 @ray.remote(num_cpus=4, num_gpus=1)
@@ -91,18 +91,28 @@ class Prefiller:
 
     def __repr__(self):
         return self.name
-
-    def send_kv(self, request_id: str, target_rank: int):
-        kv_cache = self.kv_cache_manager.pop_request(request_id)
-        assert(kv_cache.dtype == torch.bfloat16)
-        collective.send(kv_cache, target_rank)
+    
+    def send_k(self, request_id: str, target_rank: int):
+        cache_k = self.kv_cache_manager.pop_request_cache_k(request_id)
+        # print(f"Sending K cache of shape {cache_k.shape}")
+        assert cache_k.dtype == torch.bfloat16
+        collective.send(cache_k, target_rank)
         torch.cuda.synchronize()
 
-        # Free memory
-        del kv_cache
+        del cache_k
         gc.collect()
-        torch.cuda.empty_cache()
-        print(f"Sent {request_id} to decoder")
+        # print("Sent K cache")
+
+    def send_v(self, request_id: str, target_rank: int):
+        cache_v = self.kv_cache_manager.pop_request_cache_v(request_id)
+        # print(f"Sending V cache of shape {cache_v.shape}")
+        assert cache_v.dtype == torch.bfloat16
+        collective.send(cache_v, target_rank)
+        torch.cuda.synchronize()
+
+        del cache_v
+        gc.collect()
+        # print("Sent V cache")
 
     def run(self):
         print(f"Starting on GPU {self.rank}")
