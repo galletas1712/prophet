@@ -165,65 +165,51 @@ class DecodeDataBatch:
         self.free_slots = SortedSet(range(max_batch_size))
         self.occupied_slots = SortedSet()
 
-    def fill_slot(self, idx: int, request: Request):
-        # This property allows us to extract the kv cache at the right position
-        request.idx_in_data_batch = idx
-        self.requests[idx] = request
-
-        # Set input_tokens to be the prompt_tokens, plus output_tokens so far
-        # Output_tokens should only be one element from prefill
-        prompt_len = len(request.prompt_tokens)
-        output_len = len(request.output_tokens)
-        self.input_tokens[idx] = torch.tensor(
-            request.output_tokens[-1:], dtype=torch.long, device="cuda")  # TODO: remove cuda device here?
-        assert self.input_tokens[idx].shape[0] == 1
-
-        # Only token we process
-        self.start_pos[idx] = prompt_len + output_len - 1
-
-        # Can't hurt to make sure it's in CUDA.
-        self.cache_k[idx, :request.cache_k.shape[0]].copy_(request.cache_k)
-        self.cache_v[idx, :request.cache_v.shape[0]].copy_(request.cache_v)
-
-        self.free_slots.discard(idx)
-        self.occupied_slots.add(idx)
-
-    def batch_preempt_slots(self, indices: List[int], requests: List[Request]):
-        assert len(indices) == len(requests)
-        old_requests = [self.requests[idx] for idx in indices]
+    def batch_preempt_slots(self, slots: List[int], new_requests: List[Request]):
+        print(f"Batch preempting slots: indices = {slots}, requests = {[r.request_id for r in new_requests]}")
+        assert len(slots) == len(new_requests)
+        old_requests = [self.requests[idx] for idx in slots]
         streams = [
-            torch.cuda.Stream() for _ in range(len(indices))
+            torch.cuda.Stream() for _ in range(len(slots))
         ]
 
         torch.cuda.synchronize()
-        for i in range(len(indices)):
+        for i, new_request in enumerate(new_requests):
+            slot = slots[i]
+            old_len = self.start_pos[slot] + 1
             with torch.cuda.stream(streams[i]):
                 # TODO: check non-blocking for CUDA/not CUDA?
-                old_len = self.start_pos[indices[i]] + 1
-                old_requests[i].cache_k[:old_len].copy_(self.cache_k[indices[i], :old_len])
-                old_requests[i].cache_v[:old_len].copy_(self.cache_v[indices[i], :old_len])
-                self.cache_k[indices[i], :requests[i].cache_k.shape[0]].copy_(requests[i].cache_k)
-                self.cache_v[indices[i], :requests[i].cache_v.shape[0]].copy_(requests[i].cache_v)
-                self.cache_k[indices[i], requests[i].cache_k.shape[0]:old_len] = 0
-                self.cache_v[indices[i], requests[i].cache_v.shape[0]:old_len] = 0
+                # TODO: turn into two CUDA graphs: one for fill and one for preempt
+                if self.requests[slot] is not None:
+                    self.requests[slot].cache_k[:old_len].copy_(torch.squeeze(self.cache_k[slot, :old_len], 0))
+                    self.requests[slot].cache_v[:old_len].copy_(torch.squeeze(self.cache_v[slot, :old_len], 0))
+                self.cache_k[slot, :new_request.cache_k.shape[0]].copy_(new_request.cache_k)
+                self.cache_v[slot, :new_request.cache_v.shape[0]].copy_(new_request.cache_v)
+                self.cache_k[slot, new_request.cache_k.shape[0]:old_len] = 0
+                self.cache_v[slot, new_request.cache_v.shape[0]:old_len] = 0
         torch.cuda.synchronize()
-        
-        # TODO: update other fields outside of KV cache
+    
+        # Update non-KV cache fields (fill slot)
+        for i, new_request in enumerate(new_requests):
+            slot = slots[i]
+            if self.requests[slot] is not None:
+                print(f"Evicting request {self.requests[slot].request_id} from slot {slot}")
+                self.requests[slot].idx_in_data_batch = None
+            self.requests[slot] = new_request
+            new_request.idx_in_data_batch = slot
 
-    def preempt_slot(self, idx: int, request: Request):
-        old_request = self.requests[idx]
-        old_request.cache_k = self.cache_k[idx, :self.start_pos[idx] + 1].clone()
-        old_request.cache_v = self.cache_v[idx, :self.start_pos[idx] + 1].clone()
-        self.clear_slot(idx)
-        self.fill_slot(idx, request)
+            self.input_tokens[slot] = new_request.output_tokens[-1]
+            self.start_pos[slot] = len(new_request.prompt_tokens) + len(new_request.output_tokens) - 1
+
+            if slot in self.free_slots:
+                self.free_slots.discard(slot)
+                self.occupied_slots.add(slot)
 
     def clear_slot(self, idx: int):
-        self.requests[idx].idx_in_batch = None
+        self.requests[idx].idx_in_data_batch = None
         self.requests[idx] = None
         self.input_tokens[idx] = self.pad_token
         self.start_pos[idx] = 0
-        self.cache_k[idx] = 0
-        self.cache_v[idx] = 0
         self.free_slots.add(idx)
         self.occupied_slots.discard(idx)
 
