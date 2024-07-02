@@ -166,7 +166,7 @@ class DecodeDataBatch:
         self.occupied_slots = SortedSet()
 
     def batch_preempt_slots(self, slots: List[int], new_requests: List[Request]):
-        print(f"Batch preempting slots: indices = {slots}, requests = {[r.request_id for r in new_requests]}")
+        # print(f"Batch preempting slots: indices = {slots}, requests = {[r.request_id for r in new_requests]}")
         assert len(slots) == len(new_requests)
         streams = [
             torch.cuda.Stream() for _ in range(len(slots))
@@ -187,12 +187,13 @@ class DecodeDataBatch:
                 self.cache_k[slot, new_request.cache_k.shape[0]:old_len] = 0
                 self.cache_v[slot, new_request.cache_v.shape[0]:old_len] = 0
         torch.cuda.synchronize()
+        # TODO (Jack said): move pointers instead of copying? What's the overhead of updating pointers? Does it deteriorate inference?
     
         # Update non-KV cache fields (fill slot)
         for i, new_request in enumerate(new_requests):
             slot = slots[i]
             if self.requests[slot] is not None:
-                print(f"Evicting request {self.requests[slot].request_id} from slot {slot}")
+                # print(f"Evicting request {self.requests[slot].request_id} from slot {slot}")
                 self.requests[slot].idx_in_data_batch = None
             self.requests[slot] = new_request
             new_request.idx_in_data_batch = slot
