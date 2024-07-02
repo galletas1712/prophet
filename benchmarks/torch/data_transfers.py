@@ -85,65 +85,153 @@ def gpu2gpu_transfer(source_device, target_device, dtype):
         print(f"Average time for {byte_size} bytes: {sum(times) / len(times)} seconds")
 
 
-def cpu_gpu_transfer_no_pin(dtype):
+def gpu2cpu_transfer_no_pin(dtype):
+    print("GPU to CPU transfer without pinned memory")
+    byte_sizes = [1, 16, 64, 1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
+    num_iterations = 50
+
+    bits = torch.finfo(dtype).bits
+    for byte_size in byte_sizes:
+        dim = byte_size // (bits * 8)
+
+        cpu_tensor = torch.rand((dim,), dtype=dtype, device="cpu", pin_memory=False)
+        gpu_tensor = torch.rand((dim,), dtype=dtype, device="cuda", pin_memory=False)
+
+        # Warmup
+        cpu_tensor.copy_(gpu_tensor)
+
+        torch.cuda.cudart().cudaProfilerStart()
+        batch_start_event = torch.cuda.Event(enable_timing=True)
+        batch_end_event = torch.cuda.Event(enable_timing=True)
+        batch_start_event.record()
+        for it in range(num_iterations):
+            torch.cuda.nvtx.range_push(f"Iteration {it}")
+            cpu_tensor.copy_(gpu_tensor)
+            torch.cuda.nvtx.range_pop()
+
+        batch_end_event.record()
+        torch.cuda.synchronize()
+        torch.cuda.cudart().cudaProfilerStop()
+
+        elapsed_time_ms = batch_start_event.elapsed_time(batch_end_event)
+        elapsed_time_per_iter = elapsed_time_ms / num_iterations
+        print(f"Total elapsed time: {elapsed_time_ms} ms")
+        print(f"Elapsed time per iteration: {elapsed_time_per_iter} ms")
+
+
+def gpu2cpu_transfer_pinned(dtype):
+    print("GPU to CPU transfer without pinned memory")
+    byte_sizes = [1, 16, 64, 1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
+    num_iterations = 50
+
+    bits = torch.finfo(dtype).bits
+    for byte_size in byte_sizes:
+        dim = byte_size // (bits * 8)
+
+        cpu_tensor = torch.rand((dim,), dtype=dtype, device="cpu", pin_memory=True)
+        gpu_tensor = torch.rand((dim,), dtype=dtype, device="cuda")
+
+        # Warmup
+        cpu_tensor.copy_(gpu_tensor)
+
+        torch.cuda.cudart().cudaProfilerStart()
+        batch_start_event = torch.cuda.Event(enable_timing=True)
+        batch_end_event = torch.cuda.Event(enable_timing=True)
+        batch_start_event.record()
+        for it in range(num_iterations):
+            torch.cuda.nvtx.range_push(f"Iteration {it}")
+            cpu_tensor.copy_(gpu_tensor)
+            torch.cuda.nvtx.range_pop()
+
+        batch_end_event.record()
+        torch.cuda.synchronize()
+        torch.cuda.cudart().cudaProfilerStop()
+
+
+        elapsed_time_ms = batch_start_event.elapsed_time(batch_end_event)
+        elapsed_time_per_iter = elapsed_time_ms / num_iterations
+        print(f"Total elapsed time: {elapsed_time_ms} ms")
+        print(f"Elapsed time per iteration: {elapsed_time_per_iter} ms")
+
+def cpu2gpu_transfer_no_pin(dtype):
     print("CPU to GPU transfer without pinned memory")
     byte_sizes = [1, 16, 64, 1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
+    num_iterations = 50
 
     bits = torch.finfo(dtype).bits
     for byte_size in byte_sizes:
         dim = byte_size // (bits * 8)
 
-        cpu2gpu_times = []
-        gpu2cpu_times = []
-        for i in range(10):
-            # Wait for target to preallocate memory
-            tensor = torch.rand((dim,), dtype=dtype, device="cpu", pin_memory=False)
+        cpu_tensor = torch.rand((dim,), dtype=dtype, device="cpu", pin_memory=False)
+        gpu_tensor = torch.rand((dim,), dtype=dtype, device="cuda", pin_memory=False)
 
-            start_time = time.time()
-            tensor = tensor.to("cuda")  # NOTE: Can't use a non-blocking transfer but we wouldn't for benchmarking anyways
-            end_time = time.time()
-            if i > 1:
-                cpu2gpu_times.append(end_time - start_time)
+        # Warmup
+        gpu_tensor.copy_(cpu_tensor)
 
-            start_time = time.time()
-            tensor = tensor.to("cpu")
-            end_time = time.time()
-            if i > 1:  # A few warmup iterations
-                gpu2cpu_times.append(end_time - start_time)
-        print(f"Average cpu2gpu time for {byte_size} bytes: {sum(cpu2gpu_times) / len(cpu2gpu_times)} seconds")
-        print(f"Average gpu2cpu time for {byte_size} bytes: {sum(gpu2cpu_times) / len(gpu2cpu_times)} seconds")
-    
+        torch.cuda.cudart().cudaProfilerStart()
+        batch_start_event = torch.cuda.Event(enable_timing=True)
+        batch_end_event = torch.cuda.Event(enable_timing=True)
+        batch_start_event.record()
+        for it in range(num_iterations):
+            torch.cuda.nvtx.range_push(f"Iteration {it}")
+            gpu_tensor.copy_(cpu_tensor)
+            torch.cuda.nvtx.range_pop()
 
-def cpu_gpu_transfer_pinned(dtype):
+        batch_end_event.record()
+        torch.cuda.synchronize()
+        torch.cuda.cudart().cudaProfilerStop()
+
+        elapsed_time_ms = batch_start_event.elapsed_time(batch_end_event)
+        elapsed_time_per_iter = elapsed_time_ms / num_iterations
+        print(f"Total elapsed time: {elapsed_time_ms} ms")
+        print(f"Elapsed time per iteration: {elapsed_time_per_iter} ms")
+
+
+def cpu2gpu_transfer_pinned(dtype):
     print("CPU to GPU transfer with pinned memory")
     byte_sizes = [1, 16, 64, 1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
+    num_iterations = 50
 
     bits = torch.finfo(dtype).bits
     for byte_size in byte_sizes:
         dim = byte_size // (bits * 8)
 
-        cpu2gpu_times = []
-        gpu2cpu_times = []
-        for i in range(10):
-            # Wait for target to preallocate memory
-            tensor = torch.rand((dim,), dtype=dtype, device="cpu", pin_memory=True)
+        cpu_tensor = torch.rand((dim,), dtype=dtype, device="cpu", pin_memory=True)
+        gpu_tensor = torch.rand((dim,), dtype=dtype, device="cuda")
 
-            start_time = time.time()
-            tensor = tensor.to("cuda")  # NOTE: Use blocking transfer for benchmarking
-            end_time = time.time()
-            if i > 1:
-                cpu2gpu_times.append(end_time - start_time)
+        # Warmup
+        gpu_tensor.copy_(cpu_tensor)
 
-            start_time = time.time()
-            tensor = tensor.to("cpu")
-            end_time = time.time()
-            if i > 1:  # A few warmup iterations
-                gpu2cpu_times.append(end_time - start_time)
-        print(f"Average cpu2gpu time for {byte_size} bytes: {sum(cpu2gpu_times) / len(cpu2gpu_times)} seconds")
-        print(f"Average gpu2cpu time for {byte_size} bytes: {sum(gpu2cpu_times) / len(gpu2cpu_times)} seconds")
+        torch.cuda.cudart().cudaProfilerStart()
+        batch_start_event = torch.cuda.Event(enable_timing=True)
+        batch_end_event = torch.cuda.Event(enable_timing=True)
+        batch_start_event.record()
+        for it in range(num_iterations):
+            torch.cuda.nvtx.range_push(f"Iteration {it}")
+            gpu_tensor.copy_(cpu_tensor)
+            torch.cuda.nvtx.range_pop()
+
+        batch_end_event.record()
+        torch.cuda.synchronize()
+        torch.cuda.cudart().cudaProfilerStop()
+
+
+        elapsed_time_ms = batch_start_event.elapsed_time(batch_end_event)
+        elapsed_time_per_iter = elapsed_time_ms / num_iterations
+        print(f"Total elapsed time: {elapsed_time_ms} ms")
+        print(f"Elapsed time per iteration: {elapsed_time_per_iter} ms")
 
 if __name__ == '__main__':
     dtype = torch.bfloat16
     gpu2gpu_transfer(0, 1, dtype)
-    cpu_gpu_transfer_no_pin(dtype)
-    cpu_gpu_transfer_pinned(dtype)
+    print()
+    gpu2cpu_transfer_no_pin(dtype)
+    print()
+    gpu2cpu_transfer_pinned(dtype)
+    print()
+    cpu2gpu_transfer_no_pin(dtype)
+    print()
+    cpu2gpu_transfer_pinned(dtype)
+
+# TODO (Jack said): cpu intervention at each iteration of gpu2gpu, but also within the same gpu
+# TODO (Jack said): data transfers within gpu

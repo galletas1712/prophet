@@ -52,6 +52,7 @@ class DummyModel:
 
 def test_rotating_preemption(
     model: DummyModel,
+    preempt: bool,
     num_queries_in_sched: int = 16,
     num_iterations: int = 200):
     request_bank = []
@@ -84,8 +85,7 @@ def test_rotating_preemption(
         model.forward(decode_batch.input_tokens, decode_batch.start_pos, decode_batch.first_pad_idx, decode_batch.cache_k, decode_batch.cache_v)
 
     # Populate initial batch
-    for i in decode_batch.get_free_slots():
-        decode_batch.fill_slot(i, request_bank[i])
+    decode_batch.batch_preempt_slots(decode_batch.get_free_slots(), request_bank[:model.max_batch_size])
 
     # Warmup
     forward()
@@ -99,9 +99,10 @@ def test_rotating_preemption(
         torch.cuda.nvtx.range_push(f"Iteration {it}")
 
         # Preemption logic
-        preempt_indices = [i for i in range(model.max_batch_size)]
-        preempt_requests = [request_bank[(it * model.max_batch_size + i) % num_queries_in_sched] for i in preempt_indices]
-        decode_batch.batch_preempt_slots(preempt_indices, preempt_requests)
+        if preempt:
+            preempt_indices = [i for i in range(model.max_batch_size)]
+            preempt_requests = [request_bank[(it * model.max_batch_size + i) % num_queries_in_sched] for i in preempt_indices]
+            decode_batch.batch_preempt_slots(preempt_indices, preempt_requests)
 
         # Do the forward pass
         forward()
@@ -122,7 +123,9 @@ if __name__ == '__main__':
     torch.set_default_tensor_type(torch.cuda.BFloat16Tensor)
     torch.set_default_device("cuda")
     model=DummyModel()
-    test_rotating_preemption(model)
+    test_rotating_preemption(model, True)
+    print()
+    test_rotating_preemption(model, False)
 
 
 # Measuring cost of context switches
@@ -134,3 +137,5 @@ if __name__ == '__main__':
 # How big should the size of the copy be so that we can still hide latency? cudaAsync...
 
 # TODO: change pattern in how we load requests. Different amounts of preemption, positions or preemption, etc
+
+# TODO (Jack said): what's contributing to the overhead? Is it copying? Cache misses? How long does the copying actually take within a GPU? How long does CPU overhead take? Synchronization?
