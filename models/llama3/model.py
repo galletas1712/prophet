@@ -333,6 +333,14 @@ class Transformer(nn.Module):
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
     ):
+        print("Forward pass")
+        print("Tokens contiguous?", tokens.is_contiguous())
+        print("start_pos contiguous?", start_pos.is_contiguous())
+        print("first_pad_idx contiguous?", first_pad_idx.is_contiguous())
+        print("cache_k contiguous?", cache_k.is_contiguous())
+        print("cache_v contiguous?", cache_v.is_contiguous())
+        print()
+
         batch_size, seqlen = tokens.shape
 
         h = self.tok_embeddings(tokens)

@@ -135,5 +135,3 @@ if __name__ == '__main__':
     agg_df = pd.concat(dfs.values(), keys=dfs.keys())
     print(agg_df)
 
-
-# TODO (Jack said): cpu intervention at each iteration of gpu2gpu, but also within the same gpu

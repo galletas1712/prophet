@@ -187,7 +187,6 @@ class DecodeDataBatch:
                 self.cache_k[slot, new_request.cache_k.shape[0]:old_len] = 0
                 self.cache_v[slot, new_request.cache_v.shape[0]:old_len] = 0
         torch.cuda.synchronize()
-        # TODO (Jack said): move pointers instead of copying? What's the overhead of updating pointers? Does it deteriorate inference?
     
         # Update non-KV cache fields (fill slot)
         for i, new_request in enumerate(new_requests):

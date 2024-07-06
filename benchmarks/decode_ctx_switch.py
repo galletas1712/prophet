@@ -138,4 +138,3 @@ if __name__ == '__main__':
 
 # TODO: change pattern in how we load requests. Different amounts of preemption, positions or preemption, etc
 
-# TODO (Jack said): what's contributing to the overhead? Is it copying? Cache misses? How long does the copying actually take within a GPU? How long does CPU overhead take? Synchronization?
