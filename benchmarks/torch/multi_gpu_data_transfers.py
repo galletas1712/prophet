@@ -1,4 +1,4 @@
-import gc
+import pandas as pd
 import ray
 import ray.util.collective as collective
 import time
@@ -19,8 +19,6 @@ class Source:
     def send_tensor(self, target_rank: int):
         collective.send(self.tensor, target_rank)
         torch.cuda.synchronize()
-        del self.tensor
-        gc.collect()
 
 
 @ray.remote(num_gpus=1)
@@ -35,8 +33,6 @@ class Target:
     def receive_tensor(self, source_rank: int):
         collective.recv(self.tensor, source_rank)
         torch.cuda.synchronize()
-        del self.tensor
-        gc.collect()
 
 
 def ray_setup(source_device, target_device, dtype):
@@ -54,28 +50,54 @@ def ray_setup(source_device, target_device, dtype):
 
 def gpu2gpu_transfer(num_iterations: int, byte_sizes: List[int], dtype: torch.dtype, source_device: int, target_device: int):
     print("GPU to GPU transfer")
+    elapsed_time = []
+    elapsed_time_per_iter = []
 
     source, target = ray_setup(source_device, target_device, dtype)
-    byte_sizes = [1, 16, 64, 1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
 
     bits = torch.finfo(dtype).bits
     for byte_size in byte_sizes:
         dim = byte_size // (bits * 8)
 
-        times = []
-        for i in range(num_iterations):
-            # Wait for target to preallocate memory
-            ray.get([
-                source.preallocate.remote(dim),
-                target.preallocate.remote(dim)
-            ])
+        # Wait for target to preallocate memory
+        ray.get([
+            source.preallocate.remote(dim),
+            target.preallocate.remote(dim)
+        ])
 
-            start_time = time.time()
+        # Warmup
+        ray.get([
+            source.send_tensor.remote(target_device),
+            target.receive_tensor.remote(source_device)
+        ])
+
+        start_time = time.perf_counter_ns()
+        for i in range(num_iterations):
             ray.get([
                 source.send_tensor.remote(target_device),
                 target.receive_tensor.remote(source_device)
             ])
-            end_time = time.time()
-            if i > 1:  # A few warmup iterations
-                times.append(end_time - start_time)
-        print(f"Average time for {byte_size} bytes: {sum(times) / len(times)} seconds")
+        end_time = time.perf_counter_ns()
+        elapsed_time_ms = (end_time - start_time) / 1e6
+        elapsed_time_per_iter_ms = elapsed_time_ms / num_iterations
+
+        elapsed_time.append(elapsed_time_ms)
+        elapsed_time_per_iter.append(elapsed_time_per_iter_ms)
+    
+    df = pd.DataFrame({
+        "Byte Size": byte_sizes,
+        "Elapsed Time (ms)": elapsed_time,
+        "Elapsed Time per Iteration (ms)": elapsed_time_per_iter
+    })
+
+    return df
+
+
+if __name__ == '__main__':
+    num_iterations = 50
+    byte_sizes = [1, 16, 64, 1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
+    dtype = torch.bfloat16
+    source_device = 0
+    target_device = 1
+    df = gpu2gpu_transfer(num_iterations, byte_sizes, dtype, source_device, target_device)
+    print(df)
