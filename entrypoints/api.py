@@ -37,11 +37,8 @@ class Request:
     cache_k: Optional[torch.Tensor] = None
     cache_v: Optional[torch.Tensor] = None
 
-    # For profiling
-    estimated_token_length: Optional[int] = None
-
     # For benchmarking
-    benchmark_metrics: RequestBenchmarkMetrics = field(default_factory=RequestBenchmarkMetrics)
+    epochs: List[int] = field(default_factory=list)
 
     def free_cache(self):
         del self.cache_k

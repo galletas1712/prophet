@@ -1,4 +1,4 @@
-import gc
+import time
 import torch
 import ray
 from entrypoints.api import RequestStage, WorkerType
@@ -9,6 +9,19 @@ from ray.util.queue import Queue, Empty
 import ray.util.collective as collective
 from models.llama3.model import ModelArgs
 
+
+class DecoderBenchmark:
+    def __init__(self):
+        self.epoch_end_pcs = []
+    
+    def start_decoder(self):
+        self.start_pc = time.perf_counter()
+    
+    def end_epoch(self):
+        self.epoch_end_pcs.append(time.perf_counter())
+    
+    def get_epoch_time(self, epoch):
+        return self.epoch_end_pcs[epoch] - (self.epoch_end_pcs[epoch - 1] if epoch > 0 else self.start_pc)
 
 @ray.remote(num_cpus=4, num_gpus=1)
 class Decoder:
@@ -40,6 +53,8 @@ class Decoder:
 
         assert self.config.decode_scheduler.max_requests_in_scheduler >= self.config.decode_scheduler.batch_size
         self.num_scheduler_slots = self.config.decode_scheduler.max_requests_in_scheduler
+
+        self.benchmarker = DecoderBenchmark()
 
     def setup(self):
         print(f"{self.name} initializing LLM...")
@@ -73,7 +88,9 @@ class Decoder:
 
     def run(self):
         print(f"Starting on GPU {self.rank}")
-        while True:
+
+        self.benchmarker.start_decoder()
+        for epoch in range(self.config.decoder_epochs):
             num_free_slots = self.num_scheduler_slots - self.llm.num_requests_in_progress
             requests_to_add = []
             for _ in range(num_free_slots):
@@ -112,18 +129,16 @@ class Decoder:
                 print(f"Decoder received request {request.request_id} pending scheduling...")
                 self.llm.add_request(request)
 
-                # First token from prefill
-                request.benchmark_metrics.received_token()
-
             # Do work
             done_requests, request_batch = self.llm.step_decode()
-
-            # Update benchmarks
-            torch.cuda.synchronize()
             for request in request_batch:
-                request.benchmark_metrics.received_token()
+                request.epochs.append(epoch)
 
             for request in done_requests:
                 # NOTE: Important to block until queue is free
                 print(f"Decoder finished request {request.request_id}")
                 self.output_queue.put(request)
+            
+            torch.cuda.synchronize()
+            self.benchmarker.end_epoch()
+            print(f"Epoch {epoch} time: {self.benchmarker.get_epoch_time(epoch)}")

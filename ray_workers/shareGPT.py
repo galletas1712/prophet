@@ -66,13 +66,10 @@ class ShareGPTRequestGenerator:
     def __init__(
             self,
             config,
-            append_suffix: bool,
             tokenizer_path: str,
             request_queue: Queue,
         ):
         self.config = config
-        self.append_suffix = append_suffix
-        self.prompt_suffix = config.prompt_suffix
         self.tokenizer_path = tokenizer_path
         self.request_queue = request_queue
 
@@ -81,11 +78,6 @@ class ShareGPTRequestGenerator:
         self.corpus = ShareGPTCorpus(self.config.corpus_path, self.tokenizer_path, self.config.max_prompt_tokens)
         print("Done loading shareGPT corpus!")
     
-    def _append_prompt_suffix(self, prompt):
-        prompt[-1].update({
-            "content": prompt[-1]["content"] + "\n\n" + self.prompt_suffix
-        })
-    
     async def run(self):
         print("Begin request generation")
         while True:
@@ -93,10 +85,6 @@ class ShareGPTRequestGenerator:
             num_requests = np.random.poisson(self.config.arrivals_per_sec)
             for _ in range(num_requests):
                 prompt = self.corpus.sample()
-                if self.append_suffix:
-                    assert self.prompt_suffix is not None and len(self.prompt_suffix) > 0
-                    self._append_prompt_suffix(prompt)
-                
                 prompt_tokens = self.corpus.formatter.encode_chat_completion(prompt)
                 request_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, str(prompt_tokens)))
 
