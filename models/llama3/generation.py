@@ -114,6 +114,7 @@ class Llama:
             prefill_batch.first_pad_idx,
             prefill_batch.cache_k,
             prefill_batch.cache_v,
+            RequestStage.PREFILL
         )
 
         self.sample_and_add_token(
@@ -141,6 +142,7 @@ class Llama:
             first_pad_idx,
             cache_k,
             cache_v,
+            RequestStage.DECODE
         )
 
         self.sample_and_add_token(

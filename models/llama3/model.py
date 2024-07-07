@@ -9,6 +9,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from entrypoints.api import RequestStage
+
 
 @dataclass
 class ModelArgs:
@@ -137,6 +139,7 @@ class Attention(nn.Module):
         cache_v: torch.Tensor,
         mask: Optional[torch.Tensor],
         layer_idx: int,
+        mode: RequestStage
     ):
         bsz, seqlen, _ = x.shape
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
@@ -150,23 +153,36 @@ class Attention(nn.Module):
         xk = repeat_kv(xk, self.n_rep)
         xv = repeat_kv(xv, self.n_rep)
 
-        # TODO: Vectorized implementation.
-        for sample_idx in range(bsz):
-            curr_start_pos = start_pos[sample_idx]
-
+        if mode == RequestStage.DECODE:
             cache_k[
-                sample_idx,
-                curr_start_pos: curr_start_pos + seqlen,
+                torch.arange(bsz),
+                start_pos,
                 layer_idx,
                 :,
-            ] = xk[sample_idx].view(seqlen, -1)
+            ] = xk.view(bsz, -1)
 
             cache_v[
-                sample_idx,
-                curr_start_pos: curr_start_pos + seqlen,
+                torch.arange(bsz),
+                start_pos,
                 layer_idx,
                 :,
-            ] = xv[sample_idx].view(seqlen, -1)
+            ] = xv.view(bsz, -1)
+        elif mode == RequestStage.PREFILL:
+            cache_k[
+                torch.arange(bsz),
+                :seqlen,
+                layer_idx,
+                :,
+            ] = xk.view(bsz, seqlen, -1)
+
+            cache_v[
+                torch.arange(bsz),
+                :seqlen,
+                layer_idx,
+                :,
+            ] = xv.view(bsz, seqlen, -1)
+        else:
+            raise ValueError(f"Invalid mode: {self.mode}")
 
         # Invalid indices will be ignored due to mask.
         keys = cache_k[:, :, layer_idx, :].view(
@@ -255,6 +271,7 @@ class TransformerBlock(nn.Module):
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
         mask: Optional[torch.Tensor],
+        mode: RequestStage
     ):
         h = x + self.attention(
             self.attention_norm(x),
@@ -264,6 +281,7 @@ class TransformerBlock(nn.Module):
             cache_v,
             mask,
             self.layer_id,
+            mode
         )
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
@@ -332,6 +350,7 @@ class Transformer(nn.Module):
         first_pad_idx: torch.Tensor,
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
+        mode: RequestStage,
     ):
         # TODO: come back to this to make tensor contiguous at decode?
         # print("Forward pass")
@@ -366,7 +385,7 @@ class Transformer(nn.Module):
         )
 
         for layer_id, layer in enumerate(self.layers):
-            h = layer(h, start_pos, freqs_cis, cache_k, cache_v, mask)
+            h = layer(h, start_pos, freqs_cis, cache_k, cache_v, mask, mode)
         h = self.norm(h)
         output = self.output(h).float()
         return output
