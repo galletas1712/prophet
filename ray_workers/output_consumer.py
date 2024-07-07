@@ -26,5 +26,6 @@ class OutputConsumer:
                 request.output_tokens,
                 None,
             )
+            print(f"Request prompt: {request.prompt}")
             print(
                 f"Output tokens: {len(request.output_tokens)}, Output: {request.output}")

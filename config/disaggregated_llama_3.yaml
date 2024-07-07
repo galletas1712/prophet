@@ -9,4 +9,4 @@ defaults:
   - override hydra/job_logging: disabled
 
 seed: 1
-decoder_epochs: 1000
+decoder_epochs: 5000

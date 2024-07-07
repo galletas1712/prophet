@@ -161,6 +161,9 @@ class DecodeDataBatch:
         self.cache_k = torch.zeros(kv_dim, device="cuda")
         self.cache_v = torch.zeros(kv_dim, device="cuda")
 
+        # Preallocate mask
+        self.mask = torch.zeros((max_batch_size, max_seq_len), device="cuda")
+
         # All slots free at first
         self.free_slots = SortedSet(range(max_batch_size))
         self.occupied_slots = SortedSet()
@@ -172,6 +175,8 @@ class DecodeDataBatch:
             torch.cuda.Stream() for _ in range(len(slots))
         ]
 
+        # Update input tokens and start_pos before updating kv cache and mask
+
         torch.cuda.synchronize()
         for i, new_request in enumerate(new_requests):
             slot = slots[i]
@@ -179,6 +184,10 @@ class DecodeDataBatch:
             with torch.cuda.stream(streams[i]):
                 # TODO: check non-blocking for CUDA/not CUDA?
                 # TODO: turn into two CUDA graphs: one for fill and one for preempt
+                self.input_tokens[slot] = new_request.output_tokens[-1]
+                self.start_pos[slot] = len(new_request.prompt_tokens) + len(new_request.output_tokens) - 1
+                self.mask[slot, :self.start_pos[slot]] = 0
+                self.mask[slot, self.start_pos[slot]:] = float("-inf")
                 if self.requests[slot] is not None:
                     self.requests[slot].cache_k[:old_len].copy_(torch.squeeze(self.cache_k[slot, :old_len], 0))
                     self.requests[slot].cache_v[:old_len].copy_(torch.squeeze(self.cache_v[slot, :old_len], 0))
@@ -188,7 +197,7 @@ class DecodeDataBatch:
                 self.cache_v[slot, new_request.cache_v.shape[0]:old_len] = 0
         torch.cuda.synchronize()
     
-        # Update non-KV cache fields (fill slot)
+        # Update request metadata (fill slot)
         for i, new_request in enumerate(new_requests):
             slot = slots[i]
             if self.requests[slot] is not None:
@@ -196,9 +205,6 @@ class DecodeDataBatch:
                 self.requests[slot].idx_in_data_batch = None
             self.requests[slot] = new_request
             new_request.idx_in_data_batch = slot
-
-            self.input_tokens[slot] = new_request.output_tokens[-1]
-            self.start_pos[slot] = len(new_request.prompt_tokens) + len(new_request.output_tokens) - 1
 
             if slot in self.free_slots:
                 self.free_slots.discard(slot)

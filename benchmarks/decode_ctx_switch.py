@@ -37,7 +37,7 @@ class DummyModel:
         kv_size = model_args.max_seq_len * model_args.n_layers * model_args.dim * (torch.finfo(torch.bfloat16).bits // 8)
         print(f"Model Initialized. Each query's KV size is: {kv_size} bytes")
 
-    def forward(self, input_tokens, start_pos, first_pad_idx, cache_k, cache_v):
+    def forward(self, input_tokens, start_pos, first_pad_idx, cache_k, cache_v, mode, mask):
         # Run through model, populating KV caches.
         logits = self.model.forward(
             input_tokens,
@@ -45,6 +45,8 @@ class DummyModel:
             first_pad_idx,
             cache_k,
             cache_v,
+            mode,
+            mask
         )
 
         return logits
@@ -78,11 +80,19 @@ def test_rotating_preemption(
         model.max_seq_len,
         model.model_args.n_layers,
         model.model_args.dim,
-        -1 # TODO: jank
+        -1 # NOTE: jank
     )
 
     def forward():
-        model.forward(decode_batch.input_tokens, decode_batch.start_pos, decode_batch.first_pad_idx, decode_batch.cache_k, decode_batch.cache_v)
+        model.forward(
+            decode_batch.input_tokens,
+            decode_batch.start_pos,
+            decode_batch.first_pad_idx,
+            decode_batch.cache_k,
+            decode_batch.cache_v,
+            RequestStage.DECODE,
+            decode_batch.mask
+        )
 
     # Populate initial batch
     decode_batch.batch_preempt_slots(decode_batch.get_free_slots(), request_bank[:model.max_batch_size])

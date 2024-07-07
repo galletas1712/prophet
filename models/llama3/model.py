@@ -316,32 +316,34 @@ class Transformer(nn.Module):
     # (bs, n_local_heads, seqlen, max_seq_len).
     @torch.inference_mode()
     def build_attention_mask(
-        self, prompt_len, cache_len, start_pos, first_pad_idx
+        self,
+        prompt_len: int,
+        max_seq_len: int,
+        start_pos: torch.Tensor,
+        first_pad_idx: torch.Tensor,
+        mode: RequestStage
     ):
+        # Cache len means max_seq_len
         batch_size = start_pos.shape[0]
+        
+        assert mode is RequestStage.PREFILL
 
-        mask = torch.zeros(
-            batch_size,
-            1,
-            prompt_len,
-            cache_len,
-            device="cuda",
+        # TODO: what if we preallocated for prefills as well?
+        mask = torch.full(
+            (
+                batch_size,
+                1,
+                prompt_len,
+                max_seq_len,
+            ),
+            float("-inf")
         )
 
-        # Add mask for input tokens. TODO: Vectorized implementation.
-        for sample_idx in range(batch_size):
-            curr_pad_idx = first_pad_idx[sample_idx]
-            curr_start_pos = start_pos[sample_idx]
-            for input_seq_idx in range(prompt_len):
-                mask[
-                    sample_idx,
-                    :,
-                    input_seq_idx,
-                    curr_start_pos + min(input_seq_idx + 1, curr_pad_idx):,
-                ] = float("-inf")
-
+        for b in range(batch_size):
+            mask[b, 0, :first_pad_idx[b], :first_pad_idx[b]] = torch.triu(torch.full((first_pad_idx[b], first_pad_idx[b]), float("-inf")), diagonal=1)
         return mask
-
+        
+        
     @torch.inference_mode()
     def forward(
         self,
@@ -351,6 +353,7 @@ class Transformer(nn.Module):
         cache_k: torch.Tensor,
         cache_v: torch.Tensor,
         mode: RequestStage,
+        mask: Optional[torch.Tensor] = None,
     ):
         # TODO: come back to this to make tensor contiguous at decode?
         # print("Forward pass")
@@ -369,20 +372,21 @@ class Transformer(nn.Module):
         # NOTE: scheduled requests might have different numbers of tokens
         # already outputted, so we need a different start_pos for each.
 
-        # TODO: Vectorized implementation.
-        freqs_cis = []
-        for sample_idx in range(batch_size):
-            curr_start_pos = start_pos[sample_idx]
-            freqs_cis.append(
-                self.freqs_cis[curr_start_pos: curr_start_pos + seqlen]
-            )
-
-        freqs_cis = torch.stack(freqs_cis)
+        freqs_cis = torch.stack([
+            self.freqs_cis[start_pos[b]: start_pos[b] + seqlen]
+            for b in range(batch_size)
+        ])
 
         # NOTE: tokens.shape[1] is the maximum token length in current batch (decode = 1)
-        mask = self.build_attention_mask(
-            tokens.shape[1], cache_k.shape[1], start_pos, first_pad_idx
-        )
+        if mode is RequestStage.PREFILL:
+            mask = self.build_attention_mask(
+                tokens.shape[1], cache_k.shape[1], start_pos, first_pad_idx, mode
+            )
+        elif mode is RequestStage.DECODE:
+            assert mask is not None
+            mask = mask[:, None, None, :]
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
 
         for layer_id, layer in enumerate(self.layers):
             h = layer(h, start_pos, freqs_cis, cache_k, cache_v, mask, mode)

@@ -134,6 +134,7 @@ class Llama:
         first_pad_idx = decode_batch.first_pad_idx[:b_lim]
         cache_k = decode_batch.cache_k[:b_lim, :s_lim]
         cache_v = decode_batch.cache_v[:b_lim, :s_lim]
+        mask = decode_batch.mask[:b_lim, :s_lim]
 
         # Run through model, populating KV caches.
         logits = self.model.forward(
@@ -142,7 +143,8 @@ class Llama:
             first_pad_idx,
             cache_k,
             cache_v,
-            RequestStage.DECODE
+            RequestStage.DECODE,
+            mask
         )
 
         self.sample_and_add_token(
@@ -192,6 +194,7 @@ class Llama:
 
             if request.stage == RequestStage.DECODE:
                 batch.input_tokens[request_idx] = curr_next_token
+                batch.mask[request_idx, batch.start_pos[request_idx]] = 0
                 batch.start_pos[request_idx] += 1
 
             # If generation sample EOS or hits max seq len, sets request stage
