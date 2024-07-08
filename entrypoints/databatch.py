@@ -168,8 +168,7 @@ class DecodeDataBatch:
         self.free_slots = SortedSet(range(max_batch_size))
         self.occupied_slots = SortedSet()
 
-        self.preemption_times = []
-        self.preemption_num_requests = []
+        self.total_preemption_time = 0
 
     def batch_preempt_slots(self, slots: List[int], new_requests: List[Request]):
         # print(f"Batch preempting slots: indices = {slots}, requests = {[r.request_id for r in new_requests]}")
@@ -203,9 +202,8 @@ class DecodeDataBatch:
         preempt_end_event.record()
         torch.cuda.synchronize()
 
-        self.preemption_times.append(preempt_start_event.elapsed_time(preempt_end_event))
-        self.preemption_num_requests.append(len(slots))
-    
+        self.total_preemption_time += preempt_start_event.elapsed_time(preempt_end_event)
+
         # Update request metadata (fill slot)
         for i, new_request in enumerate(new_requests):
             slot = slots[i]

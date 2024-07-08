@@ -128,12 +128,8 @@ def test_rotating_preemption(
     print(f"Total elapsed time: {elapsed_time_ms} ms")
     print(f"Elapsed time per iteration: {elapsed_time_per_iter} ms")
 
-    total_preemption_time = sum(decode_batch.preemption_times)
-    preemption_time_per_request = torch.tensor(decode_batch.preemption_times) / (num_iterations * torch.tensor(decode_batch.preemption_num_requests))
-    preemption_time_per_iteration = total_preemption_time / num_iterations
-    print(f"Total preemption time: {total_preemption_time} ms")
-    print(f"Preemption time per request: {preemption_time_per_request} ms")
-    print(f"Preemption time per iteration: {preemption_time_per_iteration} ms")
+    print(f"Total preemption time: {decode_batch.total_preemption_time} ms")
+    print(f"Preemption time per iteration: {decode_batch.total_preemption_time / num_iterations} ms")
 
 
 if __name__ == '__main__':
