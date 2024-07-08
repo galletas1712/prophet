@@ -168,6 +168,9 @@ class DecodeDataBatch:
         self.free_slots = SortedSet(range(max_batch_size))
         self.occupied_slots = SortedSet()
 
+        self.preemption_times = []
+        self.preemption_num_requests = []
+
     def batch_preempt_slots(self, slots: List[int], new_requests: List[Request]):
         # print(f"Batch preempting slots: indices = {slots}, requests = {[r.request_id for r in new_requests]}")
         assert len(slots) == len(new_requests)
@@ -176,16 +179,18 @@ class DecodeDataBatch:
         ]
 
         # Update input tokens and start_pos before updating kv cache and mask
+        preempt_start_event = torch.cuda.Event(enable_timing=True)
+        preempt_end_event = torch.cuda.Event(enable_timing=True)
 
-        torch.cuda.synchronize()
+        preempt_start_event.record()
         for i, new_request in enumerate(new_requests):
             slot = slots[i]
             old_len = self.start_pos[slot] + 1
+            self.input_tokens[slot] = new_request.output_tokens[-1]
+            self.start_pos[slot] = len(new_request.prompt_tokens) + len(new_request.output_tokens) - 1
             with torch.cuda.stream(streams[i]):
                 # TODO: check non-blocking for CUDA/not CUDA?
                 # TODO: turn into two CUDA graphs: one for fill and one for preempt
-                self.input_tokens[slot] = new_request.output_tokens[-1]
-                self.start_pos[slot] = len(new_request.prompt_tokens) + len(new_request.output_tokens) - 1
                 self.mask[slot, :self.start_pos[slot]] = 0
                 self.mask[slot, self.start_pos[slot]:] = float("-inf")
                 if self.requests[slot] is not None:
@@ -195,7 +200,11 @@ class DecodeDataBatch:
                 self.cache_v[slot, :new_request.cache_v.shape[0]].copy_(new_request.cache_v)
                 self.cache_k[slot, new_request.cache_k.shape[0]:old_len] = 0
                 self.cache_v[slot, new_request.cache_v.shape[0]:old_len] = 0
+        preempt_end_event.record()
         torch.cuda.synchronize()
+
+        self.preemption_times.append(preempt_start_event.elapsed_time(preempt_end_event))
+        self.preemption_num_requests.append(len(slots))
     
         # Update request metadata (fill slot)
         for i, new_request in enumerate(new_requests):
