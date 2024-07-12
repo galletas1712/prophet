@@ -2,7 +2,6 @@ import time
 import torch
 import ray
 from entrypoints.api import RequestStage, WorkerType
-from entrypoints.databatch import PrefillDataBatch
 from entrypoints.llm import LLM
 from ray.util.queue import Queue, Empty
 
@@ -91,6 +90,13 @@ class Decoder:
 
         self.benchmarker.start_decoder()
         for epoch in range(self.config.decoder_epochs):
+            start_epoch_event = torch.cuda.Event(enable_timing=True)
+            end_receive_event = torch.cuda.Event(enable_timing=True)
+            end_model_event = torch.cuda.Event(enable_timing=True)
+            end_epoch_event = torch.cuda.Event(enable_timing=True)
+
+            start_epoch_event.record()
+
             num_free_slots = self.num_scheduler_slots - self.llm.num_requests_in_progress
             requests_to_add = []
             for _ in range(num_free_slots):
@@ -128,17 +134,27 @@ class Decoder:
 
                 print(f"Decoder received request {request.request_id} pending scheduling...")
                 self.llm.add_request(request)
+            
+            end_receive_event.record()
 
             # Do work
             done_requests, request_batch = self.llm.step_decode()
             for request in request_batch:
                 request.epochs.append(epoch)
 
+            end_model_event.record()
+
             for request in done_requests:
                 # NOTE: Important to block until queue is free
                 print(f"Decoder finished request {request.request_id}")
                 self.output_queue.put(request)
+
+            end_epoch_event.record()
             
             torch.cuda.synchronize()
             self.benchmarker.end_epoch()
             print(f"Epoch {epoch} time: {self.benchmarker.get_epoch_time(epoch)}")
+            print(f"Receiving KV cache time: {start_epoch_event.elapsed_time(end_receive_event)}")
+            print(f"Model time: {end_receive_event.elapsed_time(end_model_event)}")
+            print(f"Output queue time: {end_model_event.elapsed_time(end_epoch_event)}")
+            print(f"Total epoch time (gpu): {start_epoch_event.elapsed_time(end_epoch_event)}")
