@@ -2,12 +2,11 @@ import torch
 import gc
 import ray
 import threading
+import os
 from entrypoints.api import WorkerType
 from entrypoints.databatch import PrefillDataBatch
 from entrypoints.llm import LLM
 from ray.util.queue import Queue, Empty
-
-import ray.util.collective as collective
 
 
 class SizeLimitedThreadSafeDict:
@@ -57,7 +56,7 @@ class KVCacheManager:
 
 
 
-@ray.remote(num_cpus=4, num_gpus=1)
+@ray.remote(num_cpus=4, num_gpus=1, runtime_env={"nsight": {"s": "none"}})  # Disable CPU profiling
 class Prefiller:
     def __init__(
         self,
@@ -79,7 +78,7 @@ class Prefiller:
 
         self.kv_cache_manager = KVCacheManager(config.prefill_scheduler.batch_size)
     
-    def setup(self):
+    def setup(self, rank, world_size):
         print(f"{self.name} initializing LLM...")
         self.llm = LLM(
             self.config.model,
@@ -89,6 +88,12 @@ class Prefiller:
         )
         print(f"{self.name} done initializing LLM!")
 
+        print(f"{self.name} initializing distributed environment...")
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = '29500'
+        torch.distributed.init_process_group('nccl', rank=rank, world_size=world_size) 
+        print(f"{self.name} done initializing distributed environment!")
+
     def __repr__(self):
         return self.name
     
@@ -96,7 +101,8 @@ class Prefiller:
         cache_k = self.kv_cache_manager.pop_request_cache_k(request_id)
         # print(f"Sending K cache of shape {cache_k.shape}")
         assert cache_k.dtype == torch.bfloat16
-        collective.send(cache_k, target_rank)
+        torch.cuda.synchronize()
+        torch.distributed.send(tensor=cache_k, dst=target_rank)
         torch.cuda.synchronize()
 
         del cache_k
@@ -107,8 +113,7 @@ class Prefiller:
         cache_v = self.kv_cache_manager.pop_request_cache_v(request_id)
         # print(f"Sending V cache of shape {cache_v.shape}")
         assert cache_v.dtype == torch.bfloat16
-        collective.send(cache_v, target_rank)
-        torch.cuda.synchronize()
+        torch.distributed.send(tensor=cache_v, dst=target_rank)
 
         del cache_v
         gc.collect()

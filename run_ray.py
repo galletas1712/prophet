@@ -10,7 +10,6 @@ from ray_workers.shareGPT import ShareGPTRequestGenerator
 from ray_workers.output_consumer import OutputConsumer
 from ray.util.queue import Queue
 import ray
-import ray.util.collective as collective
 import hydra
 import torch
 
@@ -80,19 +79,13 @@ def driver(config):
         result_queue
     )
 
-    # Create the collective group
-    collective.create_collective_group(
-        [*prefillers, *decoders],
-        world_size=world_size,
-        ranks=ranks
-    )
-
     # Wait for all actors to initialize
     ray.get([
         request_generator.load_corpus.remote(),
-        *[prefiller.setup.remote() for prefiller in prefillers],
-        *[decoder.setup.remote() for decoder in decoders],
+        *[prefiller.setup.remote(0, 2) for prefiller in prefillers], # TODO: assign ranks properly
+        *[decoder.setup.remote(1, 2) for decoder in decoders],
     ])
+    # TODO: sync k and v cache transfers?
 
     # Wait for all actors to terminate
     ray.get(

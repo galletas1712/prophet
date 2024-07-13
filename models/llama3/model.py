@@ -389,7 +389,9 @@ class Transformer(nn.Module):
             raise ValueError(f"Invalid mode: {mode}")
 
         for layer_id, layer in enumerate(self.layers):
+            torch.cuda.nvtx.range_push(f"layer {layer_id}")
             h = layer(h, start_pos, freqs_cis, cache_k, cache_v, mask, mode)
+            torch.cuda.nvtx.range_pop()
         h = self.norm(h)
         output = self.output(h).float()
         return output

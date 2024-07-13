@@ -81,7 +81,9 @@ class LLM:
             # print(f"Filling/preempting slots {slots}")
             self.decode_batch.batch_preempt_slots(slots, new_requests)
 
+        torch.cuda.nvtx.range_push("model_step_decode")
         self.model.step_decode(self.decode_batch)
+        torch.cuda.nvtx.range_pop()
 
         # Process all requests that are done
         done_requests = []
