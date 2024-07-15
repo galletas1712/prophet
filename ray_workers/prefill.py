@@ -1,3 +1,4 @@
+import time
 import torch
 import gc
 import ray
@@ -77,6 +78,9 @@ class Prefiller:
         self.num_scheduler_slots = config.prefill_scheduler.max_requests_in_scheduler
 
         self.kv_cache_manager = KVCacheManager(config.prefill_scheduler.batch_size)
+
+        self.send_k_stream = torch.cuda.Stream()
+        self.send_v_stream = torch.cuda.Stream()
     
     def setup(self, rank, world_size):
         print(f"{self.name} initializing LLM...")
@@ -99,25 +103,25 @@ class Prefiller:
     
     def send_k(self, request_id: str, target_rank: int):
         cache_k = self.kv_cache_manager.pop_request_cache_k(request_id)
-        # print(f"Sending K cache of shape {cache_k.shape}")
+        print(f"Sending K cache of shape {cache_k.shape}")
         assert cache_k.dtype == torch.bfloat16
+
+        torch.cuda.nvtx.range_push("send_k_cache")
         torch.cuda.synchronize()
         torch.distributed.send(tensor=cache_k, dst=target_rank)
         torch.cuda.synchronize()
-
-        del cache_k
-        gc.collect()
-        # print("Sent K cache")
+        torch.cuda.nvtx.range_pop()
 
     def send_v(self, request_id: str, target_rank: int):
         cache_v = self.kv_cache_manager.pop_request_cache_v(request_id)
-        # print(f"Sending V cache of shape {cache_v.shape}")
+        print(f"Sending V cache of shape {cache_v.shape}")
         assert cache_v.dtype == torch.bfloat16
-        torch.distributed.send(tensor=cache_v, dst=target_rank)
 
-        del cache_v
-        gc.collect()
-        # print("Sent V cache")
+        torch.cuda.nvtx.range_push("send_v_cache")
+        torch.cuda.synchronize()
+        torch.distributed.send(tensor=cache_v, dst=target_rank)
+        torch.cuda.synchronize()
+        torch.cuda.nvtx.range_pop()
 
     def run(self):
         print(f"Starting on GPU {self.rank}")
@@ -148,9 +152,6 @@ class Prefiller:
             
             del prefill_data_batch.cache_k
             del prefill_data_batch.cache_v
-
-            gc.collect()
-            torch.cuda.empty_cache()
 
             # Log successful prefill + immediately remove from prefill scheduler
             # as no more prefills for these requests will be done.

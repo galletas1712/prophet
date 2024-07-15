@@ -20,6 +20,7 @@ import torch
     version_base=None,
 )
 def driver(config):
+    torch.cuda.nvtx.range_push("Driver")
     num_available_gpus = torch.cuda.device_count()
 
     # Assert disabled for single GPU testing.
@@ -94,6 +95,7 @@ def driver(config):
         [decoder.run.remote() for decoder in decoders] +
         [output_consumer.run.remote()]
     )
+    torch.cuda.nvtx.range_pop()
 
 
 if __name__ == '__main__':

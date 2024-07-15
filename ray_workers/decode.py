@@ -126,7 +126,6 @@ class Decoder:
                 request.cache_k, request.cache_v = torch.unbind(self.kv_cache_buffer, dim=0)
                 request.idx_in_data_batch = None
 
-                # No need to GC kv_cache_buffer here, since it is GC'ed in Request.free_cache in llm.py
                 del self.kv_cache_buffer
 
                 print(f"Decoder received request {request.request_id} pending scheduling...")
@@ -149,5 +148,6 @@ class Decoder:
             torch.cuda.nvtx.range_pop()
 
             end_event.record()
+            torch.cuda.synchronize()  # Need to synchronize after end event
             epoch_time = start_event.elapsed_time(end_event)
             print(f"Epoch {epoch} took {epoch_time} ms")

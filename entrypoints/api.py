@@ -43,4 +43,3 @@ class Request:
     def free_cache(self):
         del self.cache_k
         del self.cache_v
-        gc.collect()

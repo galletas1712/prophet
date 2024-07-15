@@ -79,7 +79,9 @@ class LLM:
 
             slots = (free_slots + preempt_slots)[:len(new_requests)]
             # print(f"Filling/preempting slots {slots}")
+            torch.cuda.nvtx.range_push("batch_preempt_slots")
             self.decode_batch.batch_preempt_slots(slots, new_requests)
+            torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("model_step_decode")
         self.model.step_decode(self.decode_batch)
