@@ -41,5 +41,7 @@ class Request:
     epochs: List[int] = field(default_factory=list)
 
     def free_cache(self):
-        del self.cache_k
-        del self.cache_v
+        # Only delete reference if it's in GPU memory
+        if self.cache_k.device.type == "cuda":
+            del self.cache_k
+            del self.cache_v

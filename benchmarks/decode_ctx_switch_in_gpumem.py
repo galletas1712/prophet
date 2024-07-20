@@ -12,7 +12,7 @@ from models.llama3.model import ModelArgs, Transformer
 class DummyModel:
     def __init__(
         self,
-        ckpt_dir: str = "/home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct",
+        ckpt_dir: str = "/root/model_weights/Meta-Llama-3-8B-Instruct",
         max_batch_size: int = 8,
         max_seq_len: int = 512,
     ):
@@ -55,6 +55,7 @@ class DummyModel:
 def test_rotating_preemption(
     model: DummyModel,
     preempt: bool,
+    page_to_cpu: bool,
     num_queries_in_sched: int = 16,
     num_iterations: int = 200):
     request_bank = []
@@ -70,8 +71,8 @@ def test_rotating_preemption(
                 output_tokens=[0],
                 max_gen_len=model.max_seq_len,  # Max it out
                 request_id=uuid.uuid4(),
-                cache_k=torch.zeros(model.kv_dim[1:], dtype=torch.bfloat16),
-                cache_v=torch.zeros(model.kv_dim[1:], dtype=torch.bfloat16),
+                cache_k=torch.zeros(model.kv_dim[1:], dtype=torch.bfloat16, device="cpu" if page_to_cpu else "cuda", pin_memory=page_to_cpu),
+                cache_v=torch.zeros(model.kv_dim[1:], dtype=torch.bfloat16, device="cpu" if page_to_cpu else "cuda", pin_memory=page_to_cpu),
             )
         )
 
@@ -136,9 +137,17 @@ if __name__ == '__main__':
     torch.set_default_tensor_type(torch.cuda.BFloat16Tensor)
     torch.set_default_device("cuda")
     model=DummyModel()
-    test_rotating_preemption(model, True)
+    print("Keep in GPU with preemption")
+    test_rotating_preemption(model, True, False)
     print()
-    test_rotating_preemption(model, False)
+    print("Keep in GPU without preemption")
+    test_rotating_preemption(model, False, False)
+    print()
+    print("Page to CPU with preemption")
+    test_rotating_preemption(model, True, True)
+    print()
+    print("Page to CPU without preemption")
+    test_rotating_preemption(model, False, True)
 
 
 # Measuring cost of context switches

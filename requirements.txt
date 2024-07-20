@@ -3,5 +3,7 @@ hydra-core
 tiktoken
 blobfile
 sortedcontainers
-ray
-cupy
+pandas
+numpy
+matplotlib
+ray[default] @ https://s3-us-west-2.amazonaws.com/ray-wheels/latest/ray-3.0.0.dev0-cp312-cp312-manylinux2014_x86_64.whl

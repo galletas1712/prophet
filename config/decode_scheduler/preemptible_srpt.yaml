@@ -8,5 +8,5 @@ max_requests_in_scheduler: 32
 initial_score: 0
 tokens_per_word: 3
 fcr_ratio: 2
-tokenizer_path: /home/ubuntu/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model
+tokenizer_path: /root/model_weights/Meta-Llama-3-8B-Instruct/tokenizer.model
 num_tokens_before_scoring: 16
