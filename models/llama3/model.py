@@ -366,17 +366,25 @@ class Transformer(nn.Module):
 
         batch_size, seqlen = tokens.shape
 
+        torch.cuda.nvtx.range_push("Token embeddings")
         h = self.tok_embeddings(tokens)
+        torch.cuda.nvtx.range_pop()
+
+        torch.cuda.nvtx.range_push("Move freqs_cis to device")
         self.freqs_cis = self.freqs_cis.to(h.device)
+        torch.cuda.nvtx.range_pop()
 
         # NOTE: scheduled requests might have different numbers of tokens
         # already outputted, so we need a different start_pos for each.
 
+        torch.cuda.nvtx.range_push("Stack precomputed freqs_cis")
         freqs_cis = torch.stack([
             self.freqs_cis[start_pos[b]: start_pos[b] + seqlen]
             for b in range(batch_size)
         ])
+        torch.cuda.nvtx.range_pop()
 
+        torch.cuda.nvtx.range_push("Build mask")
         # NOTE: tokens.shape[1] is the maximum token length in current batch (decode = 1)
         if mode is RequestStage.PREFILL:
             mask = self.build_attention_mask(
@@ -387,6 +395,7 @@ class Transformer(nn.Module):
             mask = mask[:, None, None, :]
         else:
             raise ValueError(f"Invalid mode: {mode}")
+        torch.cuda.nvtx.range_pop()
 
         for layer_id, layer in enumerate(self.layers):
             torch.cuda.nvtx.range_push(f"layer {layer_id}")
