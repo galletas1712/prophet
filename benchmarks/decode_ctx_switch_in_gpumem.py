@@ -109,14 +109,18 @@ def test_rotating_preemption(
     for it in range(num_iterations):
         torch.cuda.nvtx.range_push(f"Iteration {it}")
 
+        torch.cuda.nvtx.range_push("Preemption")
         # Preemption logic
         if preempt:
             preempt_indices = [i for i in range(model.max_batch_size)]
             preempt_requests = [request_bank[(it * model.max_batch_size + i) % num_queries_in_sched] for i in preempt_indices]
             decode_batch.batch_preempt_slots(preempt_indices, preempt_requests)
+        torch.cuda.nvtx.range_pop()
 
         # Do the forward pass
+        torch.cuda.nvtx.range_push("Forward pass")
         forward()
+        torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_pop()
 
@@ -138,16 +142,24 @@ if __name__ == '__main__':
     torch.set_default_device("cuda")
     model=DummyModel()
     print("Keep in GPU with preemption")
+    torch.cuda.nvtx.range_push("Keep in GPU with preemption")
     test_rotating_preemption(model, True, False)
+    torch.cuda.nvtx.range_pop()
     print()
     print("Keep in GPU without preemption")
+    torch.cuda.nvtx.range_push("Keep in GPU without preemption")
     test_rotating_preemption(model, False, False)
+    torch.cuda.nvtx.range_pop()
     print()
     print("Page to CPU with preemption")
+    torch.cuda.nvtx.range_push("Page to CPU with preemption")
     test_rotating_preemption(model, True, True)
+    torch.cuda.nvtx.range_pop()
     print()
     print("Page to CPU without preemption")
+    torch.cuda.nvtx.range_push("Page to CPU without preemption")
     test_rotating_preemption(model, False, True)
+    torch.cuda.nvtx.range_pop()
 
 
 # Measuring cost of context switches
