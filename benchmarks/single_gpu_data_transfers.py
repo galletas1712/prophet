@@ -16,7 +16,8 @@ def block_transfer_wrapper(
     elapsed_time = []
     elapsed_time_per_iter = []
     for byte_size in byte_sizes:
-        dim = byte_size // (bits * 8)
+        torch.cuda.nvtx.range_push("Byte Size: " + str(byte_size))
+        dim = byte_size * 8 // bits
 
         tensors = [
             torch.rand((dim,), dtype=dtype, device=device, pin_memory=pin_memory)
@@ -27,7 +28,6 @@ def block_transfer_wrapper(
         warmup(tensors)
 
         # For single-gpu stuff
-        torch.cuda.cudart().cudaProfilerStart()
         batch_start_event = torch.cuda.Event(enable_timing=True)
         batch_end_event = torch.cuda.Event(enable_timing=True)
         batch_start_event.record()
@@ -37,8 +37,8 @@ def block_transfer_wrapper(
             torch.cuda.nvtx.range_pop()
 
         batch_end_event.record()
+        torch.cuda.nvtx.range_pop()
         torch.cuda.synchronize()
-        torch.cuda.cudart().cudaProfilerStop()
 
         elapsed_time_ms = batch_start_event.elapsed_time(batch_end_event)
         elapsed_time_per_iter_ms = elapsed_time_ms / num_iterations
@@ -57,7 +57,8 @@ def block_transfer_wrapper(
 
 def gpu2cpu_transfer_no_pin(num_iterations: int, byte_sizes: List[int], dtype: torch.dtype):
     print("GPU to CPU transfer without pinned memory")
-    return block_transfer_wrapper(
+    torch.cuda.nvtx.range_push("GPU to CPU transfer without pinned memory")
+    result = block_transfer_wrapper(
         num_iterations,
         byte_sizes,
         dtype,
@@ -66,11 +67,14 @@ def gpu2cpu_transfer_no_pin(num_iterations: int, byte_sizes: List[int], dtype: t
         warmup=lambda tensors: tensors[1].copy_(tensors[0]),
         op=lambda tensors: tensors[1].copy_(tensors[0])
     )
+    torch.cuda.nvtx.range_pop()
+    return result
 
 
 def gpu2cpu_transfer_pinned(num_iterations: int, byte_sizes: List[int], dtype: torch.dtype):
     print("GPU to CPU transfer with pinned memory")
-    return block_transfer_wrapper(
+    torch.cuda.nvtx.range_push("GPU to CPU transfer with pinned memory")
+    result = block_transfer_wrapper(
         num_iterations,
         byte_sizes,
         dtype,
@@ -79,10 +83,14 @@ def gpu2cpu_transfer_pinned(num_iterations: int, byte_sizes: List[int], dtype: t
         warmup=lambda tensors: tensors[1].copy_(tensors[0]),
         op=lambda tensors: tensors[1].copy_(tensors[0])
     )
+    torch.cuda.nvtx.range_pop()
+    return result
+
 
 def cpu2gpu_transfer_no_pin(num_iterations: int, byte_sizes: List[int], dtype: torch.dtype):
     print("CPU to GPU transfer without pinned memory")
-    return block_transfer_wrapper(
+    torch.cuda.nvtx.range_push("CPU to GPU transfer without pinned memory")
+    result = block_transfer_wrapper(
         num_iterations,
         byte_sizes,
         dtype,
@@ -91,11 +99,14 @@ def cpu2gpu_transfer_no_pin(num_iterations: int, byte_sizes: List[int], dtype: t
         warmup=lambda tensors: tensors[1].copy_(tensors[0]),
         op=lambda tensors: tensors[1].copy_(tensors[0])
     )
+    torch.cuda.nvtx.range_pop()
+    return result
 
 
 def cpu2gpu_transfer_pinned(num_iterations: int, byte_sizes: List[int], dtype: torch.dtype):
     print("CPU to GPU transfer with pinned memory")
-    return block_transfer_wrapper(
+    torch.cuda.nvtx.range_push("CPU to GPU transfer with pinned memory")
+    result = block_transfer_wrapper(
         num_iterations,
         byte_sizes,
         dtype,
@@ -104,11 +115,14 @@ def cpu2gpu_transfer_pinned(num_iterations: int, byte_sizes: List[int], dtype: t
         warmup=lambda tensors: tensors[1].copy_(tensors[0]),
         op=lambda tensors: tensors[1].copy_(tensors[0])
     )
+    torch.cuda.nvtx.range_pop()
+    return result
 
 
 def intragpu_transfer(num_iterations: int, byte_sizes: List[int], dtype: torch.dtype):
     print("Intra-GPU transfer")
-    return block_transfer_wrapper(
+    torch.cuda.nvtx.range_push("Intra-GPU transfer")
+    result = block_transfer_wrapper(
         num_iterations,
         byte_sizes,
         dtype,
@@ -117,11 +131,13 @@ def intragpu_transfer(num_iterations: int, byte_sizes: List[int], dtype: torch.d
         warmup=lambda tensors: tensors[1].copy_(tensors[0]),
         op=lambda tensors: tensors[1].copy_(tensors[0])
     )
+    torch.cuda.nvtx.range_pop()
+    return result
     
 
 if __name__ == '__main__':
     num_iterations = 100
-    byte_sizes = [1, 16, 64, 1024, 16*1024, 64*1024, 1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 16*1024*1024*1024]
+    byte_sizes = [1024, 4*1024, 16*1024, 64*1024, 256*1024, 1024*1024, 4*1024*1024, 16*1024*1024, 64*1024*1024, 256*1024*1024, 1024*1024*1024]
     dtype = torch.bfloat16
 
     dfs = {

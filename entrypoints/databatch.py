@@ -188,17 +188,27 @@ class DecodeDataBatch:
             self.input_tokens[slot] = new_request.output_tokens[-1]
             self.start_pos[slot] = len(new_request.prompt_tokens) + len(new_request.output_tokens) - 1
             with torch.cuda.stream(streams[i]):
+                torch.cuda.nvtx.range_push(f"Inner preempt slot {slot}")
                 # TODO: check non-blocking for CUDA/not CUDA?
                 # TODO: turn into two CUDA graphs: one for fill and one for preempt
                 self.mask[slot, :self.start_pos[slot]] = 0
                 self.mask[slot, self.start_pos[slot]:] = float("-inf")
                 if self.requests[slot] is not None:
+                    torch.cuda.nvtx.range_push("Copy out old K cache")
                     self.requests[slot].cache_k[:old_len].copy_(torch.squeeze(self.cache_k[slot, :old_len], 0))
+                    torch.cuda.nvtx.range_pop()
+                    torch.cuda.nvtx.range_push("Copy out old V cache")
                     self.requests[slot].cache_v[:old_len].copy_(torch.squeeze(self.cache_v[slot, :old_len], 0))
+                    torch.cuda.nvtx.range_pop()
+                torch.cuda.nvtx.range_push("Copy in new K cache")
                 self.cache_k[slot, :new_request.cache_k.shape[0]].copy_(new_request.cache_k)
+                torch.cuda.nvtx.range_pop()
+                torch.cuda.nvtx.range_push("Copy in new V cache")
                 self.cache_v[slot, :new_request.cache_v.shape[0]].copy_(new_request.cache_v)
+                torch.cuda.nvtx.range_pop()
                 self.cache_k[slot, new_request.cache_k.shape[0]:old_len] = 0
                 self.cache_v[slot, new_request.cache_v.shape[0]:old_len] = 0
+                torch.cuda.nvtx.range_pop()
         preempt_end_event.record()
         torch.cuda.synchronize()
 

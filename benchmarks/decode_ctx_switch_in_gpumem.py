@@ -106,8 +106,16 @@ def test_rotating_preemption(
     batch_end_event = torch.cuda.Event(enable_timing=True)
     batch_start_event.record()
 
+    import gc
+
     for it in range(num_iterations):
         torch.cuda.nvtx.range_push(f"Iteration {it}")
+
+        # Just to get rid of any potential GC stalls in the pipeline later on in the iteration
+        # TODO: REMOVE! This isn't realistic, but we want to isolate GC stalls for now
+        torch.cuda.nvtx.range_push("GC")
+        gc.collect()
+        torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("Preemption")
         # Preemption logic
