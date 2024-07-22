@@ -94,7 +94,7 @@ def gpu2gpu_transfer(num_iterations: int, byte_sizes: List[int], dtype: torch.dt
 
     bits = torch.finfo(dtype).bits
     for byte_size in byte_sizes:
-        dim = byte_size // (bits * 8)
+        dim = byte_size * 8 // bits
 
         # Wait for target to preallocate memory
         ray.get([
@@ -132,8 +132,8 @@ def gpu2gpu_transfer(num_iterations: int, byte_sizes: List[int], dtype: torch.dt
 
 
 if __name__ == '__main__':
-    num_iterations = 50
-    byte_sizes = [1, 4, 16, 64, 1*1024, 4*1024, 16*1024, 64*1024, 1*1024*1024, 4*1024*1024, 16*1024*1024, 64*1024*1024, 1024*1024*1024, 4*1024*1024*1024]
+    num_iterations = 100
+    byte_sizes = [1024, 4*1024, 16*1024, 64*1024, 256*1024, 1024*1024, 4*1024*1024, 16*1024*1024, 64*1024*1024, 256*1024*1024, 1024*1024*1024]
     dtype = torch.bfloat16
     source_device = 0
     target_device = 1
