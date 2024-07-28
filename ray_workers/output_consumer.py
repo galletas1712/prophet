@@ -5,7 +5,7 @@ import os
 from models.llama3.tokenizer import LlamaFormatter, Tokenizer
 from ray.util.queue import Queue
 
-@ray.remote(num_cpus=2)
+@ray.remote
 class OutputConsumer:
 
     def __init__(self, config, output_dir: str, input_queue: Queue):

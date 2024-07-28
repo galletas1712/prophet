@@ -2,6 +2,7 @@ from types import FunctionType
 from typing import List
 import torch
 import pandas as pd
+import gc
 
 def block_transfer_wrapper(
     num_iterations: int,
@@ -45,6 +46,9 @@ def block_transfer_wrapper(
 
         elapsed_time.append(elapsed_time_ms)
         elapsed_time_per_iter.append(elapsed_time_per_iter_ms)
+
+        del tensors
+        gc.collect()
     
     df = pd.DataFrame({
         "Byte Size": byte_sizes,
@@ -137,7 +141,7 @@ def intragpu_transfer(num_iterations: int, byte_sizes: List[int], dtype: torch.d
 
 if __name__ == '__main__':
     num_iterations = 100
-    byte_sizes = [1024, 4*1024, 16*1024, 64*1024, 256*1024, 1024*1024, 4*1024*1024, 16*1024*1024, 64*1024*1024, 256*1024*1024, 1024*1024*1024]
+    byte_sizes = [1024, 4*1024, 16*1024, 64*1024, 256*1024, 1024*1024, 4*1024*1024, 16*1024*1024, 64*1024*1024, 256*1024*1024, 1024*1024*1024, 4*1024*1024*1024, 16*1024*1024*1024]
     dtype = torch.bfloat16
 
     dfs = {
@@ -150,4 +154,5 @@ if __name__ == '__main__':
 
     agg_df = pd.concat(dfs.values(), keys=dfs.keys())
     print(agg_df)
+    agg_df.to_csv("single_gpu_data_transfers.csv")
 

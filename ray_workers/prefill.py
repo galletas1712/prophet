@@ -57,7 +57,7 @@ class KVCacheManager:
 
 
 
-@ray.remote(num_cpus=4, num_gpus=1, runtime_env={"nsight": {"s": "none"}})  # Disable CPU profiling
+@ray.remote(num_gpus=1, runtime_env={"nsight": {"s": "none"}})  # Disable CPU profiling
 class Prefiller:
     def __init__(
         self,

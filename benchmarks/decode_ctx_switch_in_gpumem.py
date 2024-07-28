@@ -14,7 +14,7 @@ class DummyModel:
         self,
         ckpt_dir: str = "/root/model_weights/Meta-Llama-3-8B-Instruct",
         max_batch_size: int = 8,
-        max_seq_len: int = 512,
+        max_seq_len: int = 2048,
     ):
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len

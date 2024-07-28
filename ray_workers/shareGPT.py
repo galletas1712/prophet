@@ -61,7 +61,7 @@ class ShareGPTCorpus:
     def sample(self):
         return next(self.dialogs)
 
-@ray.remote(num_cpus=1)
+@ray.remote
 class ShareGPTRequestGenerator:
     def __init__(
             self,
