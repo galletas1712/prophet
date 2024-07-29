@@ -60,14 +60,13 @@ def test_rotating_preemption(
     num_iterations: int = 200):
     request_bank = []
 
-    request_input_lengths = list(torch.randint(1, model.max_seq_len, (num_queries_in_sched,)))
     print(model.kv_dim[1:])
     for q in range(num_queries_in_sched):
         request_bank.append(
             Request(
                 stage=RequestStage.DECODE,
                 prompt=None,
-                prompt_tokens=[x for x in range(request_input_lengths[q])],
+                prompt_tokens=[x for x in range(model.max_seq_len - 1)],
                 output_tokens=[0],
                 max_gen_len=model.max_seq_len,  # Max it out
                 request_id=uuid.uuid4(),

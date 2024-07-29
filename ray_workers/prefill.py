@@ -143,10 +143,16 @@ class Prefiller:
                 print(f"Received request {request.request_id} pending scheduling...")
                 self.llm.add_request(request)
 
+            start_prefill_event = torch.cuda.Event(enable_timing=True)
+            end_prefill_event = torch.cuda.Event(enable_timing=True)
+            start_prefill_event.record()
             prefill_data_batch = self.llm.step_prefill()
             if prefill_data_batch is None:
                 continue
             
+            end_prefill_event.record()
+            torch.cuda.synchronize()
+
             # Add reference of each request's prefill KV cache to data batch
             self.kv_cache_manager.new_prefill_batch(prefill_data_batch)
             
@@ -158,7 +164,9 @@ class Prefiller:
             for request in prefill_data_batch.requests:
                 self.llm.get_scheduler().remove_request(request)
                 print(f"Prefilled {request.request_id}")
+            print(f"Prefill step time: ", start_prefill_event.elapsed_time(end_prefill_event))
 
             # NOTE: Important to block until pending queue is free
             for request in prefill_data_batch.requests:
                 self.output_queue.put(request, block=True)
+
